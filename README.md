@@ -46,6 +46,7 @@ Another alternative way to install this script with python is by cloning this gi
 
 ```
 pip install wheel
+cd vosk_autosrt
 python setup.py bdist_wheel
 ```
 
