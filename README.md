@@ -109,9 +109,9 @@ options:
   -C CONCURRENCY, --concurrency CONCURRENCY
                         Number of concurrent translate API requests to make
   -v, --version         show program's version number and exit```
+```
 
 ### License
-
 MIT
 
 Check my other SPEECH RECOGNITIION + TRANSLATE PROJECTS https://github.com/botbahlul?tab=repositories
