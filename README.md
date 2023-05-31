@@ -1,6 +1,6 @@
 # vosk_autosrt <a href="https://pypi.python.org/pypi/vosk_autosrt"><img src="https://img.shields.io/pypi/v/vosk_autosrt.svg"></img></a>
   
-### Auto-generated subtitles for any video
+### Auto-generated subtitles for any video/audio files
 vosk_autosrt is a simple command line tool made with python to auto generate subtitle/closed caption file for any video or audio file using VOSK API and translate it automaticly for free using unofficial Google Translate API.
 
 ### Installation
