@@ -28,7 +28,7 @@ When you run this app for the very first time it may takes some times to downloa
 You can always download those small models manually from https://alphacephei.com/vosk/models then extract them to that used folder.
 Pay attension to those folders name, because their names should contain the language codes in \"\_\_init\_\_.py\", esspecially for Chinese language, which in \"\_\_init\_\_.py\" its code is \"zh\", so you should rename that extracted downloaded model to \"vosk-model-small-zh-0.22\". This is needed for GoogleTranslate funcion to work properly.
 ![image](https://user-images.githubusercontent.com/88623122/234000963-c2ab4c69-70fd-4374-9a1a-0cc1316791e8.png)
-![image](https://user-images.githubusercontent.com/88623122/234001411-f06821c9-0b68-4414-b3c3-a7280da4d560.png)
+![image](https://github.com/botbahlul/vosk_autosrt/assets/88623122/cd100e76-709f-4b6a-bba0-a79fefd5d31d)
 
 You can try to compile that vosk_autosrt.py script in win/linux/mac folder into a single executable file with that mypyinstaller.bat/mypyinstaller.sh:
 ```
