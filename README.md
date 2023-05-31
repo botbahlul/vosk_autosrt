@@ -30,7 +30,7 @@ Pay attension to those folders name, because their names should contain the lang
 ![image](https://user-images.githubusercontent.com/88623122/234000963-c2ab4c69-70fd-4374-9a1a-0cc1316791e8.png)
 ![image](https://github.com/botbahlul/vosk_autosrt/assets/88623122/cd100e76-709f-4b6a-bba0-a79fefd5d31d)
 
-You can try to compile that vosk_autosrt.py script in win/linux/mac folder into a single executable file with that mypyinstaller.bat/mypyinstaller.sh:
+You can try to compile that vosk_autosrt.py script in win/linux/mac folder into a single executable file with that mypyinstaller.bat (on windows)/mypyinstaller.sh (on linux/macos):
 ```
 pip install pyinstaller
 mypyinstaller.bat
