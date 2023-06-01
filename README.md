@@ -9,7 +9,7 @@ https://github.com/botbahlul/vosk_autosrt/releases
 
 Just extract those ffmpeg.exe, ffprobe.exe, and vosk_autosrt.exe into a folder that has been added to PATH ENVIRONMENT for example in C:\Windows\system32
 
-If it doesn't run well then you need to install python
+If it doesn't run well then you need to install python on your Windows system
 
 You can get latest version of ffmpeg and ffprobe from https://www.ffmpeg.org/
 
