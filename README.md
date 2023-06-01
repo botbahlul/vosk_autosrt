@@ -7,7 +7,7 @@ vosk_autosrt is a simple command line tool made with python to auto generate sub
 If you don't have python on your Windows system you can try the compiled version from this git release assets
 https://github.com/botbahlul/vosk_autosrt/releases
 
-Just extract those ffmpeg.exe, ffprobe.exe, and vosk_autosrt.exe into a folder that has been added to PATH ENVIRONTMENT for example in C:\Windows\system32
+Just extract those ffmpeg.exe, ffprobe.exe, and vosk_autosrt.exe into a folder that has been added to PATH ENVIRONMENT for example in C:\Windows\system32
 
 If it doesn't run well then you need to install python
 
