@@ -32,6 +32,18 @@ Pay attension to those folders name, because their names should contain the lang
 ![image](https://user-images.githubusercontent.com/88623122/234000963-c2ab4c69-70fd-4374-9a1a-0cc1316791e8.png)
 ![image](https://github.com/botbahlul/vosk_autosrt/assets/88623122/cd100e76-709f-4b6a-bba0-a79fefd5d31d)
 
+DON'T FORGET TO CHANGE YOUR CONSOLE (COMMAND PROMPT WINDOW) CODE PAGE TO 65001 (UTF-8)!
+
+```
+To change the codepage for the console, do the following:
+
+Start -> Run -> regedit
+Go to [HKEY_LOCAL_MACHINE\Software\Microsoft\Command Processor\Autorun]
+Change the value to @chcp 65001>nul
+If Autorun is not present, you can add a New String
+```
+![image](https://github.com/botbahlul/pyvosklivesubtitle/assets/88623122/f0a97679-d01a-4e55-b5cd-90530c4026cd)
+
 You can try to compile that vosk_autosrt.py script in win/linux/mac folder into a single executable file with that mypyinstaller.bat (on windows)/mypyinstaller.sh (on linux/macos):
 ```
 pip install pyinstaller
