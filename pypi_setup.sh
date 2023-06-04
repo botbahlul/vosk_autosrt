@@ -1,5 +1,6 @@
 #!/bin/sh
 
+export Py_DEBUG=1
 folder1="./build"
 folder2="./dist"
 folder3="./vosk_autosrt.egg-info"

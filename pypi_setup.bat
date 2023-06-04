@@ -1,5 +1,6 @@
 @echo off
 setlocal
+set Py_DEBUG=1
 
 set "folderToDelete1=.\build"
 set "folderToDelete2=.\dist"
