@@ -22,10 +22,11 @@ from glob import glob, escape
 import time
 from datetime import datetime, timedelta
 from pathlib import Path
+import shlex
 import warnings
 warnings.filterwarnings("ignore", message=".*The 'nopython' keyword.*")
 
-VERSION = "0.0.2"
+VERSION = "0.0.3"
 
 #======================================================== ffmpeg_progress_yield ========================================================#
 
@@ -1085,6 +1086,8 @@ class WavConverter:
 
     def __call__(self, media_filepath):
         temp = tempfile.NamedTemporaryFile(suffix='.wav', delete=False)
+        if "\\" in media_filepath:
+            media_filepath = media_filepath.replace("\\", "/")
         if not os.path.isfile(media_filepath):
             if self.error_messages_callback:
                 self.error_messages_callback("The given file does not exist: {0}".format(media_filepath))
@@ -1476,6 +1479,146 @@ class SRTFileReader:
             return
 
 
+class MediaSubtitleRenderer:
+    @staticmethod
+    def which(program):
+        def is_exe(file_path):
+            return os.path.isfile(file_path) and os.access(file_path, os.X_OK)
+        fpath, _ = os.path.split(program)
+        if fpath:
+            if is_exe(program):
+                return program
+        else:
+            for path in os.environ["PATH"].split(os.pathsep):
+                path = path.strip('"')
+                exe_file = os.path.join(path, program)
+                if is_exe(exe_file):
+                    return exe_file
+        return None
+
+    @staticmethod
+    def ffmpeg_check():
+        if WavConverter.which("ffmpeg"):
+            return "ffmpeg"
+        if WavConverter.which("ffmpeg.exe"):
+            return "ffmpeg.exe"
+        return None
+
+    def __init__(self, media_ext=None, subtitle_path=None, output_path=None, progress_callback=None, error_messages_callback=None):
+        self.media_ext = media_ext
+        self.subtitle_path = subtitle_path
+        self.output_path = output_path
+        self.progress_callback = progress_callback
+        self.error_messages_callback = error_messages_callback
+
+    def __call__(self, media_filepath):
+        if "\\" in media_filepath:
+            media_filepath = media_filepath.replace("\\", "/")
+
+        if "\\" in self.subtitle_path:
+            self.subtitle_path = self.subtitle_path.replace("\\", "/")
+
+        if "\\" in self.output_path:
+            self.output_path = self.output_path.replace("\\", "/")
+
+        if not os.path.isfile(media_filepath):
+            if self.error_messages_callback:
+                self.error_messages_callback("The given file does not exist: {0}".format(media_filepath))
+            else:
+                print("The given file does not exist: {0}".format(media_filepath))
+                raise Exception("Invalid file: {0}".format(media_filepath))
+        if not self.ffmpeg_check():
+            if self.error_messages_callback:
+                self.error_messages_callback("ffmpeg: Executable not found on machine.")
+            else:
+                print("ffmpeg: Executable not found on machine.")
+                raise Exception("Dependency not found: ffmpeg")
+
+        try:
+            ffmpeg_command = [
+                                "ffmpeg",
+                                "-y",
+                                "-i", media_filepath,
+                                "-vf", f"subtitles={shlex.quote(self.subtitle_path)}",
+                                self.output_path
+                             ]
+
+            ff = FfmpegProgress(ffmpeg_command)
+            percentage = 0
+            for progress in ff.run_command_with_progress():
+                percentage = progress
+                if self.progress_callback:
+                    self.progress_callback(percentage)
+
+            if os.path.isfile(self.output_path):
+                return self.output_path
+            else:
+                return None
+
+        except KeyboardInterrupt:
+            if self.error_messages_callback:
+                self.error_messages_callback("Cancelling all tasks")
+            else:
+                print("Cancelling all tasks")
+            return
+
+        except Exception as e:
+            if self.error_messages_callback:
+                self.error_messages_callback(e)
+            else:
+                print(e)
+            return
+
+
+def render_media_with_subtitle(video_path, media_type, media_ext, subtitle_path, output_path, error_messages_callback=None):
+
+    try:
+        if "\\" in video_path:
+            video_path = video_path.replace("\\", "/")
+
+        if "\\" in subtitle_path:
+            subtitle_path = subtitle_path.replace("\\", "/")
+
+        if "\\" in output_path:
+            output_path = output_path.replace("\\", "/")
+
+        ffprobe_command = f'ffprobe -v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 "{video_path}"'
+        ffprobe_process = subprocess.Popen(ffprobe_command, shell=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+        total_duration = float(ffprobe_process.stdout.read().decode().strip())
+
+        ffmpeg_command = f'ffmpeg -y -i "{video_path}" -vf "subtitles={shlex.quote(subtitle_path)}" "{output_path}"'
+
+        widgets = [f"Rendering subtitles with {media_type}           : ", Percentage(), ' ', Bar(marker="#"), ' ', ETA()]
+        pbar = ProgressBar(widgets=widgets, maxval=100).start()
+        percentage = 0
+
+        if sys.platform == "win32":
+            process = subprocess.Popen(ffmpeg_command, shell=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, universal_newlines=True)
+        else:
+            process = subprocess.Popen(ffmpeg_command, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, universal_newlines=True)
+
+        for line in process.stdout:
+            if "time=" in line:
+                #print(line)
+                time_str = line.split("time=")[1].split()[0]
+                #print("time_str = %s" %time_str)
+                current_duration = sum(float(x) * 60 ** i for i, x in enumerate(reversed(time_str.split(":"))))
+                #print("current_duration = %s" %current_duration)
+                if current_duration>0:
+                    percentage = int(current_duration*100/total_duration)
+                    #print("percentage = {}%".format(percentage))
+                    pbar.update(percentage)
+        pbar.finish()
+        return output_path
+
+    except Exception as e:
+        if error_messages_callback:
+            error_messages_callback(e)
+        else:
+            print(e)
+        return
+
+
 def show_progress(progress):
     global pbar
     pbar.update(progress)
@@ -1527,6 +1670,7 @@ def main():
     parser.add_argument('-F', '--format', help="Desired subtitle format", default="srt")
     parser.add_argument('-lf', '--list-formats', help="List all supported subtitle formats", action='store_true')
     parser.add_argument('-C', '--concurrency', help="Number of concurrent translate API requests to make", type=int, default=10)
+    parser.add_argument('-r', '--render', help="Boolean value (True or False) for render subtitle file into video file", type=bool, default=False)
     parser.add_argument('-v', '--version', action='version', version=VERSION)
 
     args = parser.parse_args()
@@ -1581,6 +1725,7 @@ def main():
     invalid_media_filepaths = []
     not_exist_filepaths = []
     argpath = None
+    media_type = None
 
     args_source_path = args.source_path
 
@@ -1607,12 +1752,19 @@ def main():
     if arg_filepaths:
         for argpath in arg_filepaths:
             if os.path.isfile(argpath):
-                if check_file_type(argpath, error_messages_callback=show_error_messages) == 'video' or check_file_type(argpath, error_messages_callback=show_error_messages) == 'audio':
+                if check_file_type(argpath, error_messages_callback=show_error_messages) == 'video':
                     media_filepaths.append(argpath)
+                    media_type = "video"
+                elif check_file_type(argpath, error_messages_callback=show_error_messages) == 'audio':
+                    media_filepaths.append(argpath)
+                    media_type = "audio"
+
                 else:
                     invalid_media_filepaths.append(argpath)
+                    media_type = None
             else:
                 not_exist_filepaths.append(argpath)
+                media_type = None
 
         if invalid_media_filepaths:
             for invalid_media_filepath in invalid_media_filepaths:
@@ -1635,6 +1787,15 @@ def main():
     transcribe_end_time = None
     transcribe_elapsed_time = None
     transcribe_start_time = time.time()
+
+    if str(args.render) == "true":
+        args.render = True
+    if str(args.render) == "false":
+        args.render = False
+
+    for media_filepath in media_filepaths:
+        if ".rendered." in str(media_filepath):
+            media_filepaths.remove(media_filepath)
 
     for media_filepath in media_filepaths:
         print("Processing {} :".format(media_filepath))
@@ -1685,15 +1846,40 @@ def main():
                 translation_writer = SubtitleWriter(created_regions, translated_subtitles, subtitle_format, error_messages_callback=show_error_messages)
                 translation_writer.write(translated_subtitle_filepath)
 
-            print('Done.')
             if do_translate:
                 os.remove(subtitle_filepath)
                 print('Translated subtitles file created at    : {}' .format(translated_subtitle_filepath))
             else:
                 print("Subtitles file created at               : {}".format(subtitle_filepath))
-            print('')
-            completed_tasks += 1
 
+            if args.render:
+                base, ext = os.path.splitext(media_filepath)
+                rendered_media_filepath = "{base}.rendered.{format}".format(base=base, format=ext[1:])
+
+                subtitle_path = None
+                if do_translate:
+                    subtitle_path=translated_subtitle_filepath
+                else:
+                    subtitle_path=subtitle_filepath
+
+                #result = render_media_with_subtitle(media_filepath, media_type, ext, subtitle_path, rendered_media_filepath, error_messages_callback=show_error_messages)
+
+                subtitle_renderer = MediaSubtitleRenderer(media_ext=ext, subtitle_path=subtitle_path, output_path=rendered_media_filepath, progress_callback=show_progress, error_messages_callback=show_error_messages)
+                widgets = [f"Rendering subtitles with {media_type}          : ", Percentage(), ' ', Bar(marker="#"), ' ', ETA()]
+                pbar = ProgressBar(widgets=widgets, maxval=100).start()
+                result = subtitle_renderer(media_filepath)
+                pbar.finish()
+
+                if result and os.path.isfile(result):
+                    print("Rendered video created at               : {}".format(rendered_media_filepath))
+
+            if not args.render:
+                completed_tasks += 1
+            else:
+                if rendered_media_filepath and os.path.isfile(rendered_media_filepath):
+                    completed_tasks += 1
+
+            print('')
             if len(media_filepaths)>0 and completed_tasks == len(media_filepaths):
                 transcribe_end_time = time.time()
                 transcribe_elapsed_time = transcribe_end_time - transcribe_start_time
