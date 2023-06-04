@@ -26,7 +26,7 @@ import shlex
 import warnings
 warnings.filterwarnings("ignore", message=".*The 'nopython' keyword.*")
 
-VERSION = "0.0.3"
+VERSION = "0.0.4"
 
 #======================================================== ffmpeg_progress_yield ========================================================#
 
@@ -667,27 +667,27 @@ def check_file_type(file_path, error_messages_callback=None):
 class VoskLanguage:
     def __init__(self):
         self.list_models = []
-        self.list_models.append("ca-es")
-        self.list_models.append("zh-cn")
-        self.list_models.append("cs-cz")
-        self.list_models.append("nl-nl")
-        self.list_models.append("en-us")
-        self.list_models.append("eo-eo")
-        self.list_models.append("fr-fr")
-        self.list_models.append("de-de")
-        self.list_models.append("hi-in")
-        self.list_models.append("it-it")
-        self.list_models.append("ja-jp")
-        self.list_models.append("kk-kz")
-        self.list_models.append("fa-ir")
-        self.list_models.append("pl-pl")
-        self.list_models.append("pt-pt")
-        self.list_models.append("ru-ru")
-        self.list_models.append("es-es")
-        self.list_models.append("sv-se")
-        self.list_models.append("tr-tr")
-        self.list_models.append("uk-ua")
-        self.list_models.append("vi-vn")
+        self.list_models.append("vosk-model-small-ca-0.4")
+        self.list_models.append("vosk-model-small-zh-0.22")
+        self.list_models.append("vosk-model-small-cs-0.4-rhasspy")
+        self.list_models.append("vosk-model-small-nl-0.22")
+        self.list_models.append("vosk-model-small-en-us-0.15")
+        self.list_models.append("vosk-model-small-eo-0.42")
+        self.list_models.append("vosk-model-small-fr-0.22")
+        self.list_models.append("vosk-model-small-de-0.15")
+        self.list_models.append("vosk-model-small-hi-0.22")
+        self.list_models.append("vosk-model-small-it-0.22")
+        self.list_models.append("vosk-model-small-ja-0.22")
+        self.list_models.append("vosk-model-small-kz-0.15")
+        self.list_models.append("vosk-model-small-fa-0.5")
+        self.list_models.append("vosk-model-small-pl-0.22")
+        self.list_models.append("vosk-model-small-pt-0.3")
+        self.list_models.append("vosk-model-small-ru-0.22")
+        self.list_models.append("vosk-model-small-es-0.42")
+        self.list_models.append("vosk-model-small-sv-rhasspy-0.15")
+        self.list_models.append("vosk-model-small-tr-0.3")
+        self.list_models.append("vosk-model-small-uk-v3-small")
+        self.list_models.append("vosk-model-small-vn-0.3")
 
         self.list_codes = []
         self.list_codes.append("ca")
@@ -794,6 +794,7 @@ class GoogleLanguage:
         self.list_codes.append("ca")
         self.list_codes.append("ceb")
         self.list_codes.append("ny")
+        self.list_codes.append("zh")
         self.list_codes.append("zh-CN")
         self.list_codes.append("zh-TW")
         self.list_codes.append("co")
@@ -928,6 +929,7 @@ class GoogleLanguage:
         self.list_names.append("Catalan")
         self.list_names.append("Cebuano")
         self.list_names.append("Chichewa")
+        self.list_names.append("Chinese")
         self.list_names.append("Chinese (Simplified)")
         self.list_names.append("Chinese (Traditional)")
         self.list_names.append("Corsican")
