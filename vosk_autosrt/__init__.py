@@ -28,13 +28,14 @@ import warnings
 warnings.filterwarnings("ignore", message=".*The 'nopython' keyword.*")
 
 
-VERSION = "0.0.8"
+VERSION = "0.1.0"
 
 
 #============================================================== VOSK PART ==============================================================#
 
 
 #import requests
+from urllib.request import urlretrieve
 from zipfile import ZipFile
 from re import match
 from pathlib import Path
@@ -160,12 +161,17 @@ class Model(object):
     def download_model(self, model_name):
         if not MODEL_DIRS[3].exists():
             MODEL_DIRS[3].mkdir()
+
         with tqdm(unit='B', unit_scale=True, unit_divisor=1024, miniters=1,
                 desc=(MODEL_PRE_URL + str(model_name.name) + '.zip').split('/')[-1]) as t:
+
             reporthook = self.download_progress_hook(t)
+
             urlretrieve(MODEL_PRE_URL + str(model_name.name) + '.zip', str(model_name) + '.zip', 
                 reporthook=reporthook, data=None)
+
             t.total = t.n
+
             with ZipFile(str(model_name) + '.zip', 'r') as model_ref:
                 model_ref.extractall(model_name.parent)
             Path(str(model_name) + '.zip').unlink()
@@ -179,6 +185,21 @@ class Model(object):
             last_b[0] = b
             return displayed
         return update_to
+
+    '''
+        prompt = f"Downloading vosk model                  : "
+        widgets = [prompt, Percentage(), ' ', Bar(), ' ', ETA()]
+        pbar = ProgressBar(widgets=widgets, maxval=100).start()
+        urlretrieve(MODEL_PRE_URL + str(model_name.name) + '.zip', str(model_name) + '.zip', reporthook=self.progress_hook)
+        pbar.finish()
+        with ZipFile(str(model_name) + '.zip', 'r') as model_ref:
+            model_ref.extractall(model_name.parent)
+        Path(str(model_name) + '.zip').unlink()
+
+    def progress_hook(self, block_count, block_size, total_size):
+        percentage = int(100*block_count*block_size/total_size)
+        pbar.update(percentage)
+    '''
 
 
 class SpkModel(object):
@@ -299,9 +320,34 @@ class BatchRecognizer(object):
 
 class VoskLanguage:
     def __init__(self):
+        self.list_langs = []
+        self.list_langs.append("ca")
+        self.list_langs.append("cn")
+        self.list_langs.append("cs")
+        self.list_langs.append("nl")
+        self.list_langs.append("en-us")
+        self.list_langs.append("eo")
+        self.list_langs.append("fr")
+        self.list_langs.append("de")
+        self.list_langs.append("hi")
+        self.list_langs.append("it")
+        self.list_langs.append("ja")
+        self.list_langs.append("kz")
+        self.list_langs.append("ko")
+        self.list_langs.append("fa")
+        self.list_langs.append("pl")
+        self.list_langs.append("pt")
+        self.list_langs.append("ru")
+        self.list_langs.append("es")
+        self.list_langs.append("sv")
+        self.list_langs.append("tr")
+        self.list_langs.append("ua")
+        self.list_langs.append("uz")
+        self.list_langs.append("vn")
+
         self.list_models = []
         self.list_models.append("vosk-model-small-ca-0.4")
-        self.list_models.append("vosk-model-small-zh-0.22")
+        self.list_models.append("vosk-model-small-cn-0.22")
         self.list_models.append("vosk-model-small-cs-0.4-rhasspy")
         self.list_models.append("vosk-model-small-nl-0.22")
         self.list_models.append("vosk-model-small-en-us-0.15")
@@ -312,6 +358,7 @@ class VoskLanguage:
         self.list_models.append("vosk-model-small-it-0.22")
         self.list_models.append("vosk-model-small-ja-0.22")
         self.list_models.append("vosk-model-small-kz-0.15")
+        self.list_models.append("vosk-model-small-ko-0.22")
         self.list_models.append("vosk-model-small-fa-0.5")
         self.list_models.append("vosk-model-small-pl-0.22")
         self.list_models.append("vosk-model-small-pt-0.3")
@@ -320,6 +367,7 @@ class VoskLanguage:
         self.list_models.append("vosk-model-small-sv-rhasspy-0.15")
         self.list_models.append("vosk-model-small-tr-0.3")
         self.list_models.append("vosk-model-small-uk-v3-small")
+        self.list_models.append("vosk-model-small-uz-0.22")
         self.list_models.append("vosk-model-small-vn-0.3")
 
         self.list_codes = []
@@ -335,6 +383,7 @@ class VoskLanguage:
         self.list_codes.append("it")
         self.list_codes.append("ja")
         self.list_codes.append("kk")
+        self.list_codes.append("ko")
         self.list_codes.append("fa")
         self.list_codes.append("pl")
         self.list_codes.append("pt")
@@ -358,6 +407,7 @@ class VoskLanguage:
         self.list_names.append("Italian")
         self.list_names.append("Japanese")
         self.list_names.append("Kazakh")
+        self.list_names.append("Korean")
         self.list_names.append("Persian")
         self.list_names.append("Polish")
         self.list_names.append("Portuguese")
@@ -368,9 +418,21 @@ class VoskLanguage:
         self.list_names.append("Ukrainian")
         self.list_names.append("Vietnamese")
 
-        self.model_of_language = dict(zip(self.list_names, self.list_models))
-        self.code_of_name = dict(zip(self.list_names, self.list_codes))
+        self.lang_of_name = dict(zip(self.list_names, self.list_langs))
+        self.lang_of_code = dict(zip(self.list_codes, self.list_langs))
+        self.lang_of_model = dict(zip(self.list_models, self.list_langs))
+
+        self.model_of_name = dict(zip(self.list_names, self.list_models))
+        self.model_of_code = dict(zip(self.list_codes, self.list_models))
+        self.model_of_lang = dict(zip(self.list_langs, self.list_models))
+
+        self.name_of_model = dict(zip(self.list_models, self.list_names))
         self.name_of_code = dict(zip(self.list_codes, self.list_names))
+        self.name_of_lang = dict(zip(self.list_langs, self.list_names))
+
+        self.code_of_name = dict(zip(self.list_names, self.list_codes))
+        self.code_of_lang = dict(zip(self.list_langs, self.list_codes))
+        self.code_of_model = dict(zip(self.list_models, self.list_codes))
 
         self.dict = {
                         'ca': 'Catalan',
@@ -385,6 +447,7 @@ class VoskLanguage:
                         'it': 'Italian',
                         'ja': 'Japanese',
                         'kk': 'Kazakh',
+                        'ko': 'Korean',
                         'fa': 'Persian',
                         'pl': 'Polish',
                         'pt': 'Portuguese',
@@ -396,14 +459,41 @@ class VoskLanguage:
                         'vi': 'Vietnamese',
 					}
 
-    def get_model(self, name):
-        return self.model_of_language[name]
+    def get_lang_of_name(self, name):
+        return self.lang_of_name[name]
 
-    def get_name(self, code):
+    def get_lang_of_code(self, code):
+        return self.lang_of_code[code]
+
+    def get_lang_of_model(self, model):
+        return self.lang_of_model[model]
+
+    def get_model_of_name(self, name):
+        return self.model_of_name[name]
+
+    def get_model_of_code(self, code):
+        return self.model_of_code[code]
+
+    def get_model_of_lang(self, lang):
+        return self.model_of_lang[lang]
+
+    def get_name_of_model(self, model):
+        return self.name_of_model[model]
+
+    def get_name_of_code(self, code):
         return self.name_of_code[code]
 
-    def get_code(self, language):
-        return self.code_of_name[language]
+    def get_name_of_lang(self, lang):
+        return self.name_of_lang[lang]
+
+    def get_code_of_name(self, name):
+        return self.code_of_name[name]
+
+    def get_code_of_lang(self, lang):
+        return self.code_of_lang[lang]
+
+    def get_code_of_model(self, model):
+        return self.code_of_model[model]
 
 
 class GoogleLanguage:
@@ -817,11 +907,13 @@ class GoogleLanguage:
         self.list_ffmpeg_codes.append("zul")  # Zulu
 
         self.code_of_name = dict(zip(self.list_names, self.list_codes))
+        self.code_of_ffmpeg_code = dict(zip(self.list_ffmpeg_codes, self.list_codes))
+
         self.name_of_code = dict(zip(self.list_codes, self.list_names))
+        self.name_of_ffmpeg_code = dict(zip(self.list_ffmpeg_codes, self.list_names))
 
         self.ffmpeg_code_of_name = dict(zip(self.list_names, self.list_ffmpeg_codes))
         self.ffmpeg_code_of_code = dict(zip(self.list_codes, self.list_ffmpeg_codes))
-        self.name_of_ffmpeg_code = dict(zip(self.list_ffmpeg_codes, self.list_names))
 
         self.dict = {
                         'af': 'Afrikaans',
@@ -1095,13 +1187,22 @@ class GoogleLanguage:
                                 'zu': 'zul', # Zulu
                            }
 
-    def get_name(self, code):
+    def get_code_of_name(self, name):
+        return self.code_of_name[name]
+
+    def get_code_of_ffmpeg_code(self, ffmpeg_code):
+        return self.code_of_ffmpeg_code[ffmpeg_code]
+
+    def get_name_of_code(self, code):
         return self.name_of_code[code]
 
-    def get_code(self, language):
-        return self.code_of_name[language]
+    def get_name_of_ffmpeg_code(self, ffmpeg_code):
+        return self.name_of_ffmpeg_code[ffmpeg_code]
 
-    def get_ffmpeg_code(self, code):
+    def get_ffmpeg_code_of_name(self, name):
+        return self.ffmpeg_code_of_name[name]
+
+    def get_ffmpeg_code_of_code(self, code):
         return self.ffmpeg_code_of_code[code]
 
 
@@ -1232,6 +1333,9 @@ class WavConverter:
                         if self.progress_callback:
                             self.progress_callback(info, media_file_display_name, percentage, start_time)
 
+            if self.progress_callback:
+                self.progress_callback(info, media_file_display_name, 100, start_time)
+
             temp.close()
 
             return temp.name, self.rate
@@ -1272,43 +1376,63 @@ class WavConverter:
 
 
 class VoskRecognizer:
-    def __init__(self, loglevel=-1, language_code="en", block_size=1024, progress_callback=None):
+    def __init__(self, loglevel=-1, language_code=None, block_size=4096, progress_callback=None,  error_messages_callback=None):
         self.loglevel = loglevel
         self.language_code = language_code
         self.block_size = block_size
         self.progress_callback = progress_callback
+        self.error_messages_callback = error_messages_callback
 
     def __call__(self, wav_filepath):
-        SetLogLevel(self.loglevel)
-        reader = wave.open(wav_filepath)
-        rate = reader.getframerate()
-        total_duration = reader.getnframes() / rate
-        model = Model(lang=self.language_code)
-        rec = KaldiRecognizer(model, rate)
-        rec.SetWords(True)
-        regions = []
-        transcripts = []
-        info = "Performing speech recognition"
-        media_file_display_name = os.path.basename(wav_filepath).split('/')[-1]
-        start_time = time.time()
+        try:
+            SetLogLevel(self.loglevel)
+            reader = wave.open(wav_filepath)
+            rate = reader.getframerate()
+            total_duration = reader.getnframes() / rate
+            vosk_language = VoskLanguage()
+            model = Model(lang=vosk_language.lang_of_code[self.language_code])
+            rec = KaldiRecognizer(model, rate)
+            rec.SetWords(True)
+            regions = []
+            transcripts = []
+            info = "Performing speech recognition"
+            media_file_display_name = os.path.basename(wav_filepath).split('/')[-1]
+            start_time = time.time()
         
-        while True:
-            block = reader.readframes(self.block_size)
-            if not block:
-                break
-            if rec.AcceptWaveform(block):
-                recResult_json = json.loads(rec.Result())
-                if 'result' in recResult_json:
-                    result = recResult_json["result"]
-                    text = recResult_json["text"]
-                    start_time = result[0]["start"]
-                    end_time = result[len(result)-1]["end"]
-                    progress = int(int(end_time)*100/total_duration)
-                    regions.append((start_time, end_time))
-                    transcripts.append(text)
-                    if self.progress_callback:
-                        self.progress_callback(info, media_file_display_name, progress, start_time)
-        return regions, transcripts
+            while True:
+                block = reader.readframes(self.block_size)
+                if not block:
+                    break
+                if rec.AcceptWaveform(block):
+                    recResult_json = json.loads(rec.Result())
+                    if 'result' in recResult_json:
+                        result = recResult_json["result"]
+                        text = recResult_json["text"]
+                        region_start_time = result[0]["start"]
+                        region_end_time = result[len(result)-1]["end"]
+                        progress = int(int(region_end_time)*100/total_duration)
+                        regions.append((region_start_time, region_end_time))
+                        transcripts.append(text)
+                        if self.progress_callback:
+                            self.progress_callback(info, media_file_display_name, progress, start_time)
+
+            if self.progress_callback:
+                self.progress_callback(info, media_file_display_name, 100, start_time)
+
+            return regions, transcripts
+
+        except KeyboardInterrupt:
+            if self.error_messages_callback:
+                self.error_messages_callback("Cancelling all tasks")
+            else:
+                print("Cancelling all tasks")
+            return
+
+        except Exception as e:
+            if self.error_messages_callback:
+                self.error_messages_callback(e)
+            else:
+                print(e)
 
 
 def vosk_recognize(wav_filepath, src):
@@ -1913,6 +2037,9 @@ class MediaSubtitleRenderer:
                         if self.progress_callback:
                             self.progress_callback(info, media_file_display_name, percentage, start_time)
 
+            if self.progress_callback:
+                self.progress_callback(info, media_file_display_name, 100, start_time)
+
             if os.path.isfile(self.output_path):
                 return self.output_path
             else:
@@ -2120,6 +2247,9 @@ class MediaSubtitleEmbedder:
                             if self.progress_callback:
                                 self.progress_callback(info, media_file_display_name, percentage, start_time)
 
+                if self.progress_callback:
+                    self.progress_callback(info, media_file_display_name, 100, start_time)
+
                 if os.path.isfile(self.output_path):
                     return self.output_path
                 else:
@@ -2271,6 +2401,9 @@ class MediaSubtitleRemover:
                         percentage = int(current_duration*100/(int(float(total_duration))*1000))
                         if self.progress_callback:
                             self.progress_callback(info, media_file_display_name, percentage, start_time)
+
+            if self.progress_callback:
+                self.progress_callback(info, media_file_display_name, 100, start_time)
 
             if os.path.isfile(self.output_path):
                 return self.output_path
@@ -2942,6 +3075,35 @@ def check_file_type(media_filepath, error_messages_callback=None):
     return None
 
 
+def download_vosk_model(url, folder):
+    # Create the specified folder if it doesn't exist
+    os.makedirs(folder, exist_ok=True)
+
+    # Extract the filename from the URL
+    filename = os.path.basename(url)
+
+    # Specify the path where the file will be saved
+    save_path = os.path.join(folder, filename)
+
+    # Create a progress bar widget
+    prompt = f"Downloading vosk model                  : "
+    widgets = [prompt, Percentage(), ' ', Bar(), ' ', ETA()]
+    pbar = ProgressBar(widgets=widgets, maxval=100).start()
+    def progress_hook(block_count, block_size, total_size):
+        percentage = int(100*block_count*block_size/total_size)
+        pbar.update(percentage)
+
+    # Start the download with progress
+    urlretrieve(url, save_path, progress_hook)
+    pbar.finish()
+    #print(f'\nFile downloaded and saved to: {save_path}')
+
+    with ZipFile(save_path, 'r') as zip_ref:
+        zip_ref.extractall(folder)
+    #print(f'ZIP file extracted to: {folder}')
+    os.remove(save_path)
+
+
 def show_progress(info, media_file_display_name, progress, start_time):
     global pbar
     pbar.update(progress)
@@ -3470,13 +3632,24 @@ def main():
             wav_filepath, sample_rate = wav_converter(media_filepath)
             pbar.finish()
 
+            if sys.platform == "win32":
+                vosk_cache_dir = os.path.expanduser('~\\') + '.cache' + '\\' + 'vosk'
+            elif sys.platform == "linux":
+                vosk_cache_dir = os.path.expanduser('~/.cache/vosk')
+            elif sys.platform == "darwin":
+                vosk_cache_dir = os.path.expanduser('~/Library/Caches/vosk')
+
+            vosk_model_dir = vosk_cache_dir + os.sep + vosk_language.model_of_code[args.src_language]
+
+            if not os.path.isdir(vosk_model_dir):
+                download_vosk_model(MODEL_PRE_URL + vosk_language.model_of_code[args.src_language] + ".zip", vosk_cache_dir)
+
             #marker='█'
             widgets = ["Performing speech recognition           : ", Percentage(), ' ', Bar(marker='#'), ' ', ETA()]
             pbar = ProgressBar(widgets=widgets, maxval=100).start()
-            vosk_recognizer = VoskRecognizer(loglevel=-1, language_code=args.src_language, block_size=1024, progress_callback=show_progress)
+            vosk_recognizer = VoskRecognizer(loglevel=-1, language_code=args.src_language, block_size=4096, progress_callback=show_progress)
             regions, transcripts = vosk_recognizer(wav_filepath)
             pbar.finish()
-            timed_subtitles = [(r, t) for r, t in zip(regions, transcripts) if t]
 
             if regions and transcripts:
                 subtitle_format = args.format
@@ -3647,7 +3820,7 @@ def main():
                 transcribe_elapsed_time_seconds = timedelta(seconds=int(transcribe_elapsed_time))
                 transcribe_elapsed_time_str = str(transcribe_elapsed_time_seconds)
                 hour, minute, second = transcribe_elapsed_time_str.split(":")
-                msg = "Total transcribe time                   : %s:%s:%s" %(hour.zfill(2), minute, second)
+                msg = "Total running time                      : %s:%s:%s" %(hour.zfill(2), minute, second)
                 print(msg)
 
         except KeyboardInterrupt:
