@@ -96,8 +96,9 @@ vosk_autosrt -S zh "Episode 1.mp4"
 ### Usage
 
 ```
-usage: vosk_autosrt [-h] [-S SRC_LANGUAGE] [-D DST_LANGUAGE] [-lls] [-lld] [-F FORMAT] [-lf] [-C CONCURRENCY] [-v]
-                       [source_path ...]
+usage: vosk_autosrt [-h] [-S SRC_LANGUAGE] [-D DST_LANGUAGE] [-lls] [-lld] [-F FORMAT] [-lf] [-C CONCURRENCY] [-es EMBED_SRC]
+                    [-ed EMBED_DST] [-fr FORCE_RECOGNIZE] [-v]
+                    [source_path ...]
 
 positional arguments:
   source_path           Path to the video or audio files to generate subtitles files (use wildcard for multiple files or separate
@@ -118,7 +119,13 @@ options:
   -lf, --list-formats   List all supported subtitle formats
   -C CONCURRENCY, --concurrency CONCURRENCY
                         Number of concurrent translate API requests to make
-  -v, --version         show program's version number and exit```
+  -es EMBED_SRC, --embed-src EMBED_SRC
+                        Boolean value (True or False) for embedding original language subtitle file into media file
+  -ed EMBED_DST, --embed-dst EMBED_DST
+                        Boolean value (True or False) for embedding translated subtitle file into media file
+  -fr FORCE_RECOGNIZE, --force-recognize FORCE_RECOGNIZE
+                        Boolean value (True or False) for re-recognize media file event if it's already has subtitles stream
+  -v, --version         show program's version number and exit
 ```
 
 ### License
