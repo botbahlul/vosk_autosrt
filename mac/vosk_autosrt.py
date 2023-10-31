@@ -28,7 +28,7 @@ import warnings
 warnings.filterwarnings("ignore", message=".*The 'nopython' keyword.*")
 
 
-VERSION = "0.1.6"
+VERSION = "0.1.7"
 
 
 #============================================================== VOSK PART ==============================================================#
@@ -1350,6 +1350,68 @@ class WavConverter:
         except Exception as e:
             if self.error_messages_callback:
                 self.error_messages_callback(e)
+            else:
+                print(e)
+            return
+
+
+class SpeechRegionFinder:
+    def percentile(self, arr, percent):
+        arr = sorted(arr)
+        k = (len(arr) - 1) * percent
+        f = math.floor(k)
+        c = math.ceil(k)
+        if f == c: return arr[int(k)]
+        d0 = arr[int(f)] * (c - k)
+        d1 = arr[int(c)] * (k - f)
+        return d0 + d1
+
+    #def __init__(self, frame_width=4096, min_region_size=0.5, max_region_size=6):
+    def __init__(self, frame_width=4096, min_region_size=0.5, max_region_size=6, error_messages_callback=None):
+        self.frame_width = frame_width
+        self.min_region_size = min_region_size
+        self.max_region_size = max_region_size
+        self.error_messages_callback = error_messages_callback
+
+    def __call__(self, wav_filepath):
+        try:
+            reader = wave.open(wav_filepath)
+            sample_width = reader.getsampwidth()
+            rate = reader.getframerate()
+            n_channels = reader.getnchannels()
+            total_duration = reader.getnframes() / rate
+            chunk_duration = float(self.frame_width) / rate
+            n_chunks = int(total_duration / chunk_duration)
+            energies = []
+            for i in range(n_chunks):
+                chunk = reader.readframes(self.frame_width)
+                energies.append(audioop.rms(chunk, sample_width * n_channels))
+            threshold = self.percentile(energies, 0.2)
+            elapsed_time = 0
+            regions = []
+            region_start = None
+            for energy in energies:
+                is_silence = energy <= threshold
+                max_exceeded = region_start and elapsed_time - region_start >= self.max_region_size
+                if (max_exceeded or is_silence) and region_start:
+                    if elapsed_time - region_start >= self.min_region_size:
+                        regions.append((region_start, elapsed_time))
+                        region_start = None
+                elif (not region_start) and (not is_silence):
+                    region_start = elapsed_time
+                elapsed_time += chunk_duration
+            return regions
+
+        except KeyboardInterrupt:
+            if self.error_messages_callback:
+                self.error_messages_callback("Cancelling all tasks")
+            else:
+                print("Cancelling all tasks")
+            return
+
+        except Exception as e:
+            if self.error_messages_callback:
+                self.error_messages_callback(f"SpeechRegionFinder: {e}")
             else:
                 print(e)
             return
@@ -3761,6 +3823,12 @@ def main():
                 wav_filepath, sample_rate = wav_converter(media_filepath)
                 pbar.finish()
 
+                region_finder = SpeechRegionFinder(frame_width=4096, min_region_size=0.5, max_region_size=6, error_messages_callback=show_error_messages)
+                regions = region_finder(wav_filepath)
+                if regions == None:
+                    print("No speech regions found")
+                    sys.exit(1)
+
                 if sys.platform == "win32":
                     vosk_cache_dir = os.path.expanduser('~\\') + '.cache' + '\\' + 'vosk'
                 elif sys.platform == "linux":
@@ -4029,7 +4097,15 @@ def main():
     #print(f"len(media_filepaths) = {len(media_filepaths)}")
     #print(f"completed_tasks = {completed_tasks}\n")
 
-    if len(media_filepaths)>0 and completed_tasks == len(media_filepaths):
+    if len(media_filepaths)>0 and len(processed_list)>0 and completed_tasks == len(media_filepaths) + len(processed_list):
+        transcribe_end_time = time.time()
+        transcribe_elapsed_time = transcribe_end_time - transcribe_start_time
+        transcribe_elapsed_time_seconds = timedelta(seconds=int(transcribe_elapsed_time))
+        transcribe_elapsed_time_str = str(transcribe_elapsed_time_seconds)
+        hour, minute, second = transcribe_elapsed_time_str.split(":")
+        msg = "Total running time                      : %s:%s:%s" %(hour.zfill(2), minute, second)
+        print(msg)
+    elif len(media_filepaths)>0 and completed_tasks == len(media_filepaths):
         transcribe_end_time = time.time()
         transcribe_elapsed_time = transcribe_end_time - transcribe_start_time
         transcribe_elapsed_time_seconds = timedelta(seconds=int(transcribe_elapsed_time))
