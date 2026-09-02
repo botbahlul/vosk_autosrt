@@ -16,10 +16,16 @@ if [ -f "$file1" ]; then
 	rm -f "$file1"
 fi
 
-pyinstaller --python=/usr/local/bin/python3.8 \
---add-data "./libvosk.so:." \
---hidden-import argparse \
---hidden-import sounddevice \
---hidden-import=sip --paths=/usr/local/lib/python3.8/site-packages/sipbuild \
---additional-hooks-dir=./ \
---onefile vosk_autosrt.py
+/usr/local/bin/python3.10 -m PyInstaller \
+    --add-data "./libvosk.dyld:." \
+    --hidden-import argparse \
+    --hidden-import pysrt \
+    --hidden-import six \
+    --hidden-import progressbar \
+    --hidden-import tqdm \
+    --hidden-import requests \
+    --hidden-import _cffi_backend \
+    --hidden-import sounddevice \
+    --hidden-import=sip --paths=/usr/local/lib/python3.10/site-packages/sipbuild \
+    --additional-hooks-dir=./ \
+    --onefile vosk_autosrt.py
