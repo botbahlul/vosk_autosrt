@@ -17,7 +17,7 @@ if [ -f "$file1" ]; then
 fi
 
 /usr/local/bin/python3.10 -m PyInstaller \
-    --add-data "./libvosk.dyld:." \
+    --add-data "./libvosk.so:." \
     --hidden-import argparse \
     --hidden-import pysrt \
     --hidden-import six \

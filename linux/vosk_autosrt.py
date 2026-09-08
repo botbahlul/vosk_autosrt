@@ -28,7 +28,7 @@ import warnings
 warnings.filterwarnings("ignore", message=".*The 'nopython' keyword.*")
 
 
-VERSION = "0.1.10"
+VERSION = "0.1.11"
 
 
 #============================================================== VOSK PART ==============================================================#
