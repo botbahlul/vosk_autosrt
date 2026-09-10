@@ -2,6 +2,7 @@ from __future__ import unicode_literals
 
 import os
 import platform
+import re
 import sys
 import warnings
 
@@ -30,9 +31,6 @@ except ImportError:
     sys.exit(1)
 
 
-from vosk_autosrt import VERSION
-
-
 # ----------------------------------------------------------------------
 # Python version
 # ----------------------------------------------------------------------
@@ -49,6 +47,43 @@ if sys.version_info < MIN_PYTHON:
         )
     )
     sys.exit(1)
+
+
+# ----------------------------------------------------------------------
+# Get package version WITHOUT importing vosk_autosrt
+#
+# This is important for Python 3.13+ because audioop was removed
+# from the standard library. Importing vosk_autosrt here would happen
+# before pip has installed audioop-lts.
+# ----------------------------------------------------------------------
+
+PACKAGE_DIR = os.path.join(
+    os.path.dirname(os.path.abspath(__file__)),
+    "vosk_autosrt",
+)
+
+INIT_FILE = os.path.join(
+    PACKAGE_DIR,
+    "__init__.py",
+)
+
+with open(INIT_FILE, encoding="utf-8") as f:
+    INIT_CONTENT = f.read()
+
+VERSION_MATCH = re.search(
+    r'^VERSION\s*=\s*[\'"]([^\'"]+)[\'"]',
+    INIT_CONTENT,
+    re.MULTILINE,
+)
+
+if not VERSION_MATCH:
+    print(
+        "ERROR: Unable to find VERSION in "
+        "vosk_autosrt/__init__.py"
+    )
+    sys.exit(1)
+
+VERSION = VERSION_MATCH.group(1)
 
 
 # ----------------------------------------------------------------------
@@ -84,8 +119,6 @@ def get_lib_files():
         ]
 
     elif SYSTEM == "Darwin":
-        # Keep this as libvosk.dyld if that is the actual
-        # filename shipped in vosk_autosrt.
         return [
             "libvosk.dyld",
         ]
@@ -101,7 +134,6 @@ def get_lib_files():
     raise NotImplementedError(
         "Platform '{}' is not supported.".format(SYSTEM)
     )
-
 
 # ----------------------------------------------------------------------
 # Binary distribution
@@ -146,6 +178,7 @@ def check_lib_files():
     if missing:
         print()
         print("ERROR: Required native library file(s) not found:")
+
         for filepath in missing:
             print("  - {}".format(filepath))
 
@@ -153,6 +186,7 @@ def check_lib_files():
         print("Platform : {}".format(get_platform_name()))
         print("Machine  : {}".format(MACHINE))
         print()
+
         sys.exit(1)
 
 
@@ -177,11 +211,49 @@ long_description = (
 
 
 # ----------------------------------------------------------------------
+# Runtime dependencies
+# ----------------------------------------------------------------------
+
+INSTALL_REQUIRES = [
+    "sounddevice>=0.4.4",
+    "vosk>=0.3.44",
+    "requests>=2.3.0",
+    "httpx>=0.13.3",
+    "urllib3>=1.26.0,<3.0",
+    "pysrt>=1.0.1",
+    "six>=1.11.0",
+    "progressbar2>=3.34.3",
+]
+
+
+# ----------------------------------------------------------------------
+# Python 3.13+ compatibility
+#
+# audioop was removed from the Python standard library in Python 3.13.
+#
+# vosk_autosrt uses:
+#
+#     try:
+#         import audioop
+#     except ImportError:
+#         import audioop_lts as audioop
+#
+# Therefore audioop-lts is required only for Python 3.13+.
+# ----------------------------------------------------------------------
+
+if sys.version_info >= (3, 13):
+    INSTALL_REQUIRES.append(
+        "audioop-lts"
+    )
+
+
+# ----------------------------------------------------------------------
 # Setup
 # ----------------------------------------------------------------------
 
 setup(
     name="vosk_autosrt",
+
     version=VERSION,
 
     description=(
@@ -204,16 +276,7 @@ setup(
         ],
     },
 
-    install_requires=[
-        "sounddevice>=0.4.4",
-        "vosk>=0.3.44",
-        "requests>=2.3.0",
-        "httpx>=0.13.3",
-        "urllib3>=1.26.0,<3.0",
-        "pysrt>=1.0.1",
-        "six>=1.11.0",
-        "progressbar2>=3.34.3",
-    ],
+    install_requires=INSTALL_REQUIRES,
 
     license=open(
         os.path.join(
@@ -231,4 +294,3 @@ setup(
 
     distclass=BinaryDistribution,
 )
-
