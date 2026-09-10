@@ -1,11 +1,17 @@
 from __future__ import absolute_import, print_function, unicode_literals
 import argparse
-import audioop
 import math
 import multiprocessing
 import os
 import subprocess
 import sys
+if sys.version_info >= (3, 13):
+    try:
+        import audioop
+    except ImportError:
+        import audioop_lts as audioop
+else:
+    import audioop
 import tempfile
 import wave
 import json
@@ -28,7 +34,7 @@ import warnings
 warnings.filterwarnings("ignore", message=".*The 'nopython' keyword.*")
 
 
-VERSION = "0.2.0"
+VERSION = "0.2.2"
 
 
 #============================================================== VOSK PART ==============================================================#
