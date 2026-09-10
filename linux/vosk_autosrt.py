@@ -18,7 +18,7 @@ from progressbar import ProgressBar, Percentage, Bar, ETA
 import pysrt
 import six
 # ADDITIONAL IMPORT
-from glob import glob, escape
+import glob
 import time
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -28,7 +28,7 @@ import warnings
 warnings.filterwarnings("ignore", message=".*The 'nopython' keyword.*")
 
 
-VERSION = "0.1.11"
+VERSION = "0.2.0"
 
 
 #============================================================== VOSK PART ==============================================================#
@@ -53,14 +53,35 @@ _ffi = _cffi_backend.FFI('vosk.vosk_cffi',
 # Remote location of the models and local folders
 MODEL_PRE_URL = 'https://alphacephei.com/vosk/models/'
 MODEL_LIST_URL = MODEL_PRE_URL + 'model-list.json'
+
 #MODEL_DIRS = [os.getenv('VOSK_MODEL_PATH'), Path('/usr/share/vosk'), Path.home() / 'AppData/Local/vosk', Path.home() / '.cache/vosk']
 MODEL_DIRS = None
-if sys.platform == 'darwin':
-    MODEL_DIRS = [os.getenv('VOSK_MODEL_PATH'), Path('/usr/share/vosk'), Path.home() / 'Library/Caches/vosk']
-elif sys.platform == 'win32':
-    MODEL_DIRS = [os.getenv('VOSK_MODEL_PATH'), Path('/usr/share/vosk'), Path.home() / 'AppData/Local/vosk']
-else:
-    MODEL_DIRS = [os.getenv('VOSK_MODEL_PATH'), Path('/usr/share/vosk'), Path.home() / '.cache/vosk']
+
+def _build_model_dirs():
+    dirs = []
+
+    env_path = os.getenv('VOSK_MODEL_PATH')
+    if env_path:
+        dirs.append(Path(env_path))
+
+    if sys.platform == 'darwin':
+        dirs.append(Path.home() / 'Library/Caches/vosk')
+    elif sys.platform == 'win32':
+        dirs.append(Path.home() / 'AppData/Local/vosk')
+    elif sys.platform.startswith('linux'):
+        xdg_cache = os.getenv('XDG_CACHE_HOME')
+        cache_base = Path(xdg_cache) if xdg_cache else Path.home() / '.cache'
+        dirs.append(cache_base / 'vosk')
+        dirs.append(Path('/usr/share/vosk'))
+    else:
+        # generic fallback for other Unix-like platforms (BSD, etc.)
+        dirs.append(Path.home() / '.cache/vosk')
+
+    return dirs
+
+MODEL_DIRS = _build_model_dirs()
+#print(f"MODEL_DIRS : '{MODEL_DIRS}'")
+
 
 def libvoskdir():
     if sys.platform == 'win32':
@@ -103,6 +124,12 @@ def list_models():
         print(model['name']) 
 
 
+def list_bigmodels():
+    response = requests.get(MODEL_LIST_URL)
+    for model in response.json():
+        print(model['name']) 
+
+
 def list_languages():
     response = requests.get(MODEL_LIST_URL)
     languages = set([m['lang'] for m in response.json()])
@@ -112,7 +139,7 @@ def list_languages():
 
 class Model(object):
     def __init__(self, model_path=None, model_name=None, lang=None):
-        if model_path != None:
+        if model_path is not None:
             self._handle = _c.vosk_model_new(model_path.encode('utf-8'))
         else:
             model_path = self.get_model_path(model_name, lang)
@@ -133,56 +160,85 @@ class Model(object):
             model_path = self.get_model_by_name(model_name)
         return str(model_path)
 
-    def get_model_by_name(self, model_name):
+    # ---------- shared helpers (avoids duplication & leftover-variable bug) ----------
+
+    def _find_local_model(self, predicate):
+        # Search for files/folders in MODEL_DIRS that satisfy predicate(filename) -> bool. 
+        # Return the first Path that matches, or None if none exists
         for directory in MODEL_DIRS:
             if directory is None or not Path(directory).exists():
                 continue
-            model_file_list = os.listdir(directory)
-            model_file = [model for model in model_file_list if model == model_name]
-            if model_file != []:
-                return Path(directory, model_file[0])
+            for filename in os.listdir(directory):
+                if predicate(filename):
+                    return Path(directory, filename)
+        return None
+
+    def _get_default_download_dir(self):
+		# Specify the download destination folder explicitly from MODEL_DIRS, 
+		# make sure the folder exists (mkdir if not)
+        download_dir = next((d for d in MODEL_DIRS if d is not None), None)
+        if download_dir is None:
+            raise Exception("no valid model directory configured for download")
+        Path(download_dir).mkdir(parents=True, exist_ok=True)
+        return download_dir
+
+    # ---------- model search / resolution ----------
+
+    def get_model_by_name(self, model_name):
+        found = self._find_local_model(lambda filename: filename == model_name)
+        if found is not None:
+            return found
+
         response = requests.get(MODEL_LIST_URL)
         result_model = [model['name'] for model in response.json() if model['name'] == model_name]
-        if result_model == []:
-            raise Exception("model name %s does not exist" % (model_name))
-        else:
-            self.download_model(Path(directory, result_model[0]))
-            return Path(directory, result_model[0])
+        if not result_model:
+            raise Exception("model name %s does not exist" % model_name)
+
+        download_dir = self._get_default_download_dir()
+        target_path = Path(download_dir, result_model[0])
+        self.download_model(target_path)
+        return target_path
 
     def get_model_by_lang(self, lang):
-        for directory in MODEL_DIRS:
-            if directory is None or not Path(directory).exists():
-                continue
-            model_file_list = os.listdir(directory)
-            model_file = [model for model in model_file_list if match(f"vosk-model(-small)?-{lang}", model)]
-            if model_file != []:
-                return Path(directory, model_file[0])
+        pattern = f"vosk-model(-small)?-{lang}"
+        found = self._find_local_model(lambda filename: match(pattern, filename))
+        if found is not None:
+            return found
+
         response = requests.get(MODEL_LIST_URL)
-        result_model = [model['name'] for model in response.json() if model['lang'] == lang and model['type'] == 'small' and model['obsolete'] == 'false']
-        if result_model == []:
-            raise Exception("lang %s does not exist" % (lang))
-        else:
-            self.download_model(Path(directory, result_model[0]))
-            return Path(directory, result_model[0])
+        result_model = [
+            model['name'] for model in response.json()
+            if model['lang'] == lang and model['type'] == 'small' and model['obsolete'] == 'false'
+        ]
+        if not result_model:
+            raise Exception("lang %s does not exist" % lang)
+
+        download_dir = self._get_default_download_dir()
+        target_path = Path(download_dir, result_model[0])
+        self.download_model(target_path)
+        return target_path
+
+    # ---------- download ----------
 
     def download_model(self, model_name):
-        # Ambil folder cache terakhir dari MODEL_DIRS, apapun platformnya
-        # (pakai [-1] bukan [3] biar tidak crash kalau panjang list beda per-OS)
-        cache_dir = MODEL_DIRS[-1]
-
-        # parents=True: bikin semua folder induk yang belum ada (mis. ~/.cache
-        #               kalau di macOS belum ada secara default)
-        # exist_ok=True: tidak error kalau foldernya sudah ada
-        if not cache_dir.exists():
-            cache_dir.mkdir(parents=True, exist_ok=True)
+		# model_name here is the full Path (target_path) that has been specified 
+		# by caller (get_model_by_name / get_model_by_lang). Just make sure 
+		# the parent folder exists; do not recalculate from MODEL_DIRS here, 
+		# so it's not possible to "wrong folder" like the previous bug.
+        target_dir = model_name.parent
+        target_dir.mkdir(parents=True, exist_ok=True)
 
         with tqdm(unit='B', unit_scale=True, unit_divisor=1024, miniters=1,
-                desc=(MODEL_PRE_URL + str(model_name.name) + '.zip').split('/')[-1]) as t:
+                  desc=(MODEL_PRE_URL + str(model_name.name) + '.zip').split('/')[-1]) as t:
 
             reporthook = self.download_progress_hook(t)
 
-            urlretrieve(MODEL_PRE_URL + str(model_name.name) + '.zip', str(model_name) + '.zip',
-                reporthook=reporthook, data=None)
+            urlretrieve(
+                MODEL_PRE_URL + str(model_name.name) + '.zip',
+                str(model_name) + '.zip',
+                reporthook=reporthook,
+                data=None
+            )
 
             t.total = t.n
 
@@ -192,28 +248,137 @@ class Model(object):
 
     def download_progress_hook(self, t):
         last_b = [0]
+
         def update_to(b=1, bsize=1, tsize=None):
             if tsize not in (None, -1):
                 t.total = tsize
             displayed = t.update((b - last_b[0]) * bsize)
             last_b[0] = b
             return displayed
+
         return update_to
 
-    '''
-        prompt = f"Downloading vosk model                  : "
-        widgets = [prompt, Percentage(), ' ', Bar(), ' ', ETA()]
-        pbar = ProgressBar(widgets=widgets, maxval=100).start()
-        urlretrieve(MODEL_PRE_URL + str(model_name.name) + '.zip', str(model_name) + '.zip', reporthook=self.progress_hook)
-        pbar.finish()
-        with ZipFile(str(model_name) + '.zip', 'r') as model_ref:
-            model_ref.extractall(model_name.parent)
-        Path(str(model_name) + '.zip').unlink()
 
-    def progress_hook(self, block_count, block_size, total_size):
-        percentage = int(100*block_count*block_size/total_size)
-        pbar.update(percentage)
-    '''
+class ModelBig(object):
+    def __init__(self, model_path=None, model_name=None, lang=None):
+        if model_path is not None:
+            self._handle = _c.vosk_model_new(model_path.encode('utf-8'))
+        else:
+            model_path = self.get_model_path(model_name, lang)
+            self._handle = _c.vosk_model_new(model_path.encode('utf-8'))
+        if self._handle == _ffi.NULL:
+            raise Exception("Failed to create a model")
+
+    def __del__(self):
+        _c.vosk_model_free(self._handle)
+
+    def vosk_model_find_word(self, word):
+        return _c.vosk_model_find_word(self._handle, word.encode('utf-8'))
+
+    def get_model_path(self, model_name, lang):
+        if model_name is None:
+            model_path = self.get_model_by_lang(lang)
+        else:
+            model_path = self.get_model_by_name(model_name)
+        return str(model_path)
+
+    # ---------- shared helpers (avoids duplication & leftover-variable bug) ----------
+
+    def _find_local_model(self, predicate):
+        # Search for files/folders in MODEL_DIRS that satisfy predicate(filename) -> bool. 
+        # Return the first Path that matches, or None if none exists
+        for directory in MODEL_DIRS:
+            if directory is None or not Path(directory).exists():
+                continue
+            for filename in os.listdir(directory):
+                if predicate(filename):
+                    return Path(directory, filename)
+        return None
+
+    def _get_default_download_dir(self):
+		# Specify the download destination folder explicitly from MODEL_DIRS, 
+		# make sure the folder exists (mkdir if not)
+        download_dir = next((d for d in MODEL_DIRS if d is not None), None)
+        if download_dir is None:
+            raise Exception("no valid model directory configured for download")
+        Path(download_dir).mkdir(parents=True, exist_ok=True)
+        return download_dir
+
+    # ---------- model search / resolution ----------
+
+    def get_model_by_name(self, model_name):
+        found = self._find_local_model(lambda filename: filename == model_name)
+        if found is not None:
+            return found
+
+        response = requests.get(MODEL_LIST_URL)
+        result_model = [model['name'] for model in response.json() if model['name'] == model_name]
+        if not result_model:
+            raise Exception("model name %s does not exist" % model_name)
+
+        download_dir = self._get_default_download_dir()
+        target_path = Path(download_dir, result_model[0])
+        self.download_model(target_path)
+        return target_path
+
+    def get_model_by_lang(self, lang):
+        pattern = f"vosk-model-{lang}"
+        found = self._find_local_model(lambda filename: match(pattern, filename))
+        if found is not None:
+            return found
+
+        response = requests.get(MODEL_LIST_URL)
+        result_model = [
+            model['name'] for model in response.json()
+            if model['lang'] == lang and model['obsolete'] == 'false'
+        ]
+        if not result_model:
+            raise Exception("lang %s does not exist" % lang)
+
+        download_dir = self._get_default_download_dir()
+        target_path = Path(download_dir, result_model[0])
+        self.download_model(target_path)
+        return target_path
+
+    # ---------- download ----------
+
+    def download_model(self, model_name):
+		# model_name here is the full Path (target_path) that has been specified 
+		# by caller (get_model_by_name / get_model_by_lang). Just make sure 
+		# the parent folder exists; do not recalculate from MODEL_DIRS here, 
+		# so it's not possible to "wrong folder" like the previous bug.
+        target_dir = model_name.parent
+        target_dir.mkdir(parents=True, exist_ok=True)
+
+        with tqdm(unit='B', unit_scale=True, unit_divisor=1024, miniters=1,
+                  desc=(MODEL_PRE_URL + str(model_name.name) + '.zip').split('/')[-1]) as t:
+
+            reporthook = self.download_progress_hook(t)
+
+            urlretrieve(
+                MODEL_PRE_URL + str(model_name.name) + '.zip',
+                str(model_name) + '.zip',
+                reporthook=reporthook,
+                data=None
+            )
+
+            t.total = t.n
+
+            with ZipFile(str(model_name) + '.zip', 'r') as model_ref:
+                model_ref.extractall(model_name.parent)
+            Path(str(model_name) + '.zip').unlink()
+
+    def download_progress_hook(self, t):
+        last_b = [0]
+
+        def update_to(b=1, bsize=1, tsize=None):
+            if tsize not in (None, -1):
+                t.total = tsize
+            displayed = t.update((b - last_b[0]) * bsize)
+            last_b[0] = b
+            return displayed
+
+        return update_to
 
 
 class SpkModel(object):
@@ -371,7 +536,7 @@ class VoskLanguage:
         self.list_models.append("vosk-model-small-hi-0.22")
         self.list_models.append("vosk-model-small-it-0.22")
         self.list_models.append("vosk-model-small-ja-0.22")
-        self.list_models.append("vosk-model-small-kz-0.15")
+        self.list_models.append("vosk-model-small-kz-0.42")
         self.list_models.append("vosk-model-small-ko-0.22")
         self.list_models.append("vosk-model-small-fa-0.5")
         self.list_models.append("vosk-model-small-pl-0.22")
@@ -382,7 +547,7 @@ class VoskLanguage:
         self.list_models.append("vosk-model-small-tr-0.3")
         self.list_models.append("vosk-model-small-uk-v3-small")
         self.list_models.append("vosk-model-small-uz-0.22")
-        self.list_models.append("vosk-model-small-vn-0.3")
+        self.list_models.append("vosk-model-small-vn-0.4")
 
         self.list_codes = []
         self.list_codes.append("ca")
@@ -447,6 +612,184 @@ class VoskLanguage:
         self.code_of_name = dict(zip(self.list_names, self.list_codes))
         self.code_of_lang = dict(zip(self.list_langs, self.list_codes))
         self.code_of_model = dict(zip(self.list_models, self.list_codes))
+
+        self.dict = {
+                        'ca': 'Catalan',
+                        'zh': 'Chinese',
+                        'cs': 'Czech',
+                        'nl': 'Dutch',
+                        'en': 'English',
+                        'eo': 'Esperanto',
+                        'fr': 'French',
+                        'de': 'German',
+                        'hi': 'Hindi',
+                        'it': 'Italian',
+                        'ja': 'Japanese',
+                        'kk': 'Kazakh',
+                        'ko': 'Korean',
+                        'fa': 'Persian',
+                        'pl': 'Polish',
+                        'pt': 'Portuguese',
+                        'ru': 'Russian',
+                        'es': 'Spanish',
+                        'sv': 'Swedish',
+                        'tr': 'Turkish',
+                        'uk': 'Ukrainian',
+                        'vi': 'Vietnamese',
+					}
+
+    def get_lang_of_name(self, name):
+        return self.lang_of_name[name]
+
+    def get_lang_of_code(self, code):
+        return self.lang_of_code[code]
+
+    def get_lang_of_model(self, model):
+        return self.lang_of_model[model]
+
+    def get_model_of_name(self, name):
+        return self.model_of_name[name]
+
+    def get_model_of_code(self, code):
+        return self.model_of_code[code]
+
+    def get_model_of_lang(self, lang):
+        return self.model_of_lang[lang]
+
+    def get_name_of_model(self, model):
+        return self.name_of_model[model]
+
+    def get_name_of_code(self, code):
+        return self.name_of_code[code]
+
+    def get_name_of_lang(self, lang):
+        return self.name_of_lang[lang]
+
+    def get_code_of_name(self, name):
+        return self.code_of_name[name]
+
+    def get_code_of_lang(self, lang):
+        return self.code_of_lang[lang]
+
+    def get_code_of_model(self, model):
+        return self.code_of_model[model]
+
+
+class VoskLanguageBig:
+    def __init__(self):
+        self.list_langs = []
+        self.list_langs.append("ca")
+        self.list_langs.append("cn")
+        self.list_langs.append("cs")
+        self.list_langs.append("nl")
+        self.list_langs.append("en-us")
+        self.list_langs.append("eo")
+        self.list_langs.append("fr")
+        self.list_langs.append("de")
+        self.list_langs.append("hi")
+        self.list_langs.append("it")
+        self.list_langs.append("ja")
+        self.list_langs.append("kz")
+        self.list_langs.append("ko")
+        self.list_langs.append("fa")
+        self.list_langs.append("pl")
+        self.list_langs.append("pt")
+        self.list_langs.append("ru")
+        self.list_langs.append("es")
+        self.list_langs.append("sv")
+        self.list_langs.append("tr")
+        self.list_langs.append("ua")
+        self.list_langs.append("uz")
+        self.list_langs.append("vn")
+
+        self.list_bigmodels = []
+        self.list_bigmodels.append("vosk-model-small-ca-0.4")
+        self.list_bigmodels.append("vosk-model-cn-0.22")
+        self.list_bigmodels.append("vosk-model-small-cs-0.4-rhasspy")
+        self.list_bigmodels.append("vosk-model-nl-spraakherkenning-0.6")
+        self.list_bigmodels.append("vosk-model-en-us-0.22")
+        self.list_bigmodels.append("vosk-model-small-eo-0.42")
+        self.list_bigmodels.append("vosk-model-fr-0.22")
+        self.list_bigmodels.append("vosk-model-de-0.21")
+        self.list_bigmodels.append("vosk-model-hi-0.22")
+        self.list_bigmodels.append("vosk-model-it-0.22")
+        self.list_bigmodels.append("vosk-model-ja-0.22")
+        self.list_bigmodels.append("vosk-model-kz-0.42")
+        self.list_bigmodels.append("vosk-model-small-ko-0.22")
+        self.list_bigmodels.append("vosk-model-fa-0.42")
+        self.list_bigmodels.append("vosk-model-small-pl-0.22")
+        self.list_bigmodels.append("vosk-model-pt-fb-v0.1.1-20220516_2113")
+        self.list_bigmodels.append("vosk-model-ru-0.42")
+        self.list_bigmodels.append("vosk-model-es-0.42")
+        self.list_bigmodels.append("vosk-model-small-sv-rhasspy-0.15")
+        self.list_bigmodels.append("vosk-model-small-tr-0.3")
+        self.list_bigmodels.append("vosk-model-uk-v3")
+        self.list_bigmodels.append("vosk-model-small-uz-0.22")
+        self.list_bigmodels.append("vosk-model-vn-0.4")
+
+        self.list_codes = []
+        self.list_codes.append("ca")
+        self.list_codes.append("zh")
+        self.list_codes.append("cs")
+        self.list_codes.append("nl")
+        self.list_codes.append("en")
+        self.list_codes.append("eo")
+        self.list_codes.append("fr")
+        self.list_codes.append("de")
+        self.list_codes.append("hi")
+        self.list_codes.append("it")
+        self.list_codes.append("ja")
+        self.list_codes.append("kk")
+        self.list_codes.append("ko")
+        self.list_codes.append("fa")
+        self.list_codes.append("pl")
+        self.list_codes.append("pt")
+        self.list_codes.append("ru")
+        self.list_codes.append("es")
+        self.list_codes.append("sv")
+        self.list_codes.append("tr")
+        self.list_codes.append("uk")
+        self.list_codes.append("vi")
+
+        self.list_names = []
+        self.list_names.append("Catalan")
+        self.list_names.append("Chinese")
+        self.list_names.append("Czech")
+        self.list_names.append("Dutch")
+        self.list_names.append("English")
+        self.list_names.append("Esperanto")
+        self.list_names.append("French")
+        self.list_names.append("German")
+        self.list_names.append("Hindi")
+        self.list_names.append("Italian")
+        self.list_names.append("Japanese")
+        self.list_names.append("Kazakh")
+        self.list_names.append("Korean")
+        self.list_names.append("Persian")
+        self.list_names.append("Polish")
+        self.list_names.append("Portuguese")
+        self.list_names.append("Russian")
+        self.list_names.append("Spanish")
+        self.list_names.append("Swedish")
+        self.list_names.append("Turkish")
+        self.list_names.append("Ukrainian")
+        self.list_names.append("Vietnamese")
+
+        self.lang_of_name = dict(zip(self.list_names, self.list_langs))
+        self.lang_of_code = dict(zip(self.list_codes, self.list_langs))
+        self.lang_of_model = dict(zip(self.list_bigmodels, self.list_langs))
+
+        self.model_of_name = dict(zip(self.list_names, self.list_bigmodels))
+        self.model_of_code = dict(zip(self.list_codes, self.list_bigmodels))
+        self.model_of_lang = dict(zip(self.list_langs, self.list_bigmodels))
+
+        self.name_of_model = dict(zip(self.list_bigmodels, self.list_names))
+        self.name_of_code = dict(zip(self.list_codes, self.list_names))
+        self.name_of_lang = dict(zip(self.list_langs, self.list_names))
+
+        self.code_of_name = dict(zip(self.list_names, self.list_codes))
+        self.code_of_lang = dict(zip(self.list_langs, self.list_codes))
+        self.code_of_model = dict(zip(self.list_bigmodels, self.list_codes))
 
         self.dict = {
                         'ca': 'Catalan',
@@ -1380,7 +1723,6 @@ class SpeechRegionFinder:
         d1 = arr[int(c)] * (k - f)
         return d0 + d1
 
-    #def __init__(self, frame_width=4096, min_region_size=0.5, max_region_size=6):
     def __init__(self, frame_width=4096, min_region_size=0.5, max_region_size=6, error_messages_callback=None):
         self.frame_width = frame_width
         self.min_region_size = min_region_size
@@ -1474,7 +1816,7 @@ class VoskRecognizer:
             info = "Performing speech recognition"
             media_file_display_name = os.path.basename(wav_filepath).split('/')[-1]
             start_time = time.time()
-        
+
             while True:
                 block = reader.readframes(self.block_size)
                 if not block:
@@ -1511,40 +1853,64 @@ class VoskRecognizer:
                 print(e)
 
 
-def vosk_recognize(wav_filepath, src):
-    SetLogLevel(-1)
-    sample_rate = 48000
-    model = Model(lang = src)
-    rec = KaldiRecognizer(model, sample_rate)
-    rec.SetWords(True)
-    block_size = 4096
-    reader = wave.open(wav_filepath)
-    rate = reader.getframerate()
-    total_duration = reader.getnframes() / rate
+class VoskRecognizerBig:
+    def __init__(self, loglevel=-1, language_code=None, block_size=4096, progress_callback=None,  error_messages_callback=None):
+        self.loglevel = loglevel
+        self.language_code = language_code
+        self.block_size = block_size
+        self.progress_callback = progress_callback
+        self.error_messages_callback = error_messages_callback
 
-    timed_subtitles = []
-    widgets = ["Performing speech recognition           : ", Percentage(), ' ', Bar(), ' ', ETA()]
-    pbar = ProgressBar(widgets=widgets, maxval=100).start()
-    while True:
-        block = reader.readframes(block_size)
-        if not block:
-            break
-        if rec.AcceptWaveform(block):
-            recResult_json = json.loads(rec.Result())
+    def __call__(self, wav_filepath):
+        try:
+            SetLogLevel(self.loglevel)
+            reader = wave.open(wav_filepath)
+            rate = reader.getframerate()
+            total_duration = reader.getnframes() / rate
+            vosk_language = VoskLanguageBig()
+            model = ModelBig(lang=vosk_language.lang_of_code[self.language_code])
+            rec = KaldiRecognizer(model, rate)
+            rec.SetWords(True)
+            regions = []
+            transcripts = []
+            info = "Performing speech recognition"
+            media_file_display_name = os.path.basename(wav_filepath).split('/')[-1]
+            start_time = time.time()
+        
+            while True:
+                block = reader.readframes(self.block_size)
+                if not block:
+                    break
+                if rec.AcceptWaveform(block):
+                    recResult_json = json.loads(rec.Result())
+                    if 'result' in recResult_json:
+                        result = recResult_json["result"]
+                        text = recResult_json["text"]
+                        region_start_time = result[0]["start"]
+                        region_end_time = result[len(result)-1]["end"]
+                        progress = int(int(region_end_time)*100/total_duration)
+                        regions.append((region_start_time, region_end_time))
+                        transcripts.append(text)
+                        if self.progress_callback:
+                            self.progress_callback(info, media_file_display_name, progress, start_time)
 
-            if 'result' in recResult_json:
-                result = recResult_json["result"]
-                text = recResult_json["text"]
-                start_time = result[0]["start"]
-                end_time = result[len(result)-1]["end"]
-                progress = int(end_time*100/total_duration)
-                #print(f"{start_time:.3f}-{end_time:.3f}: {text} {progress}%")
-                timed_subtitle = (((start_time, end_time)), text)
-                timed_subtitles.append(timed_subtitle)
-                pbar.update(progress)
-    pbar.finish()
+            if self.progress_callback:
+                self.progress_callback(info, media_file_display_name, 100, start_time)
 
-    return timed_subtitles
+            return regions, transcripts
+
+        except KeyboardInterrupt:
+            if self.error_messages_callback:
+                self.error_messages_callback("Cancelling all tasks")
+            else:
+                print("Cancelling all tasks")
+            return
+
+        except Exception as e:
+            if self.error_messages_callback:
+                self.error_messages_callback(e)
+            else:
+                print(e)
 
 
 class SentenceTranslator(object):
@@ -1943,7 +2309,7 @@ def test_translation_endpoint(src, dst, error_messages_callback=None):
 
     print("")
     print("CHECKING GOOGLE TRANSLATE ENDPOINT")
-    print("=================================-")
+    print("==================================")
 
     # ============================================================
     # ENDPOINT 1
@@ -1977,7 +2343,7 @@ def test_translation_endpoint(src, dst, error_messages_callback=None):
     try:
 
         print("Testing SentenceTranslator endpoint 1...")
-        print("URL: %s" % endpoint1["url"])
+        print("URL                                     : %s" % endpoint1["url"])
 
         response = requests.get(
             endpoint1["url"],
@@ -2017,7 +2383,7 @@ def test_translation_endpoint(src, dst, error_messages_callback=None):
 
             if translation:
 
-                print("SentenceTranslator endpoint 1 : OK")
+                print("SentenceTranslator endpoint 1           : OK")
                 #print("Translation test result        : %s" % translation)
                 print("Using endpoint 1")
                 print("")
@@ -2025,7 +2391,7 @@ def test_translation_endpoint(src, dst, error_messages_callback=None):
                 return endpoint1
 
         print(
-            "SentenceTranslator endpoint 1 : FAILED "
+            "SentenceTranslator endpoint 1           : FAILED "
             "(HTTP %s)" % response.status_code
         )
 
@@ -2033,7 +2399,7 @@ def test_translation_endpoint(src, dst, error_messages_callback=None):
             if self.error_messages_callback:
                 self.error_messages_callback(e)
             else:
-                print("SentenceTranslator endpoint 1 : FAILED")
+                print("SentenceTranslator endpoint 1           : FAILED")
                 print("Error: %s" % e)
 
     # ============================================================
@@ -2065,9 +2431,9 @@ def test_translation_endpoint(src, dst, error_messages_callback=None):
     }
 
     try:
-
+        print("")
         print("Testing SentenceTranslator endpoint 2...")
-        print("URL: %s" % endpoint2["url"])
+        print("URL                                     : %s" % endpoint2["url"])
 
         response = requests.get(
             endpoint2["url"],
@@ -2114,7 +2480,7 @@ def test_translation_endpoint(src, dst, error_messages_callback=None):
 
             if translation:
 
-                print("SentenceTranslator endpoint 2 : OK")
+                print("SentenceTranslator endpoint 2           : OK")
                 #print("Translation test result        : %s" % translation)
                 print("Using endpoint 2")
                 print("")
@@ -2122,7 +2488,7 @@ def test_translation_endpoint(src, dst, error_messages_callback=None):
                 return endpoint2
 
         print(
-            "SentenceTranslator endpoint 2 : FAILED "
+            "SentenceTranslator endpoint 2           : FAILED "
             "(HTTP %s)" % response.status_code
         )
 
@@ -2130,7 +2496,7 @@ def test_translation_endpoint(src, dst, error_messages_callback=None):
             if self.error_messages_callback:
                 self.error_messages_callback(e)
             else:
-                print("SentenceTranslator endpoint 2 : FAILED")
+                print("SentenceTranslator endpoint 2           : FAILED")
                 print("Error: %s" % e)
 
     print("")
@@ -3795,6 +4161,71 @@ def get_duration(filename, error_messages_callback=None):
         return
 
 
+import os
+import sys
+import glob
+
+def escape_glob_brackets(pattern):
+    """
+    Just escape the characters '[' and ']' so that they are treated as literals by glob, 
+    WITHOUT turning off the '*' and '?' wildcards. Applies the same on all OS because 
+    cross-platform glob module for these characters. 
+    """
+    placeholder = "\0"  # characters that are almost impossible to find in the original filename
+    pattern = pattern.replace("[", placeholder)
+    pattern = pattern.replace("]", "[]]")
+    pattern = pattern.replace(placeholder, "[[]")
+    return pattern
+
+
+def check_file(source_paths, error_messages_callback=None):
+    results = []
+
+    for raw_pattern in source_paths:
+        pattern = raw_pattern.replace("\\", "/")
+
+        # 1. First, check as a literal file (safest for filenames
+        #    with unusual characters like [ ] #, etc., requiring no escaping at all)
+        if os.path.isfile(pattern):
+            matched = [pattern]
+        else:
+            # 2. If it's not a literal file, escape only [ ] (to keep them literal)
+            #    while PRESERVING * and ? as wildcards, then process via glob
+            escaped_pattern = escape_glob_brackets(pattern)
+            matched = glob.glob(escaped_pattern)
+
+            if not matched:
+                matched = [pattern]  # no match found -> report "not exist"
+
+        for filepath in matched:
+            filepath = os.path.normpath(filepath)
+
+            exists = os.path.isfile(filepath)
+
+            label = filepath if len(filepath) <= 40 else "..." + filepath[-(40 - 3):]
+            print(f"{label:<40}: {'exists' if exists else 'not exist'}", end="")
+
+            media_type = None
+            if exists:
+                media_type = check_file_type(filepath, error_messages_callback)
+                print(f" ({media_type or 'unknown'})")
+            else:
+                print()
+
+            results.append({
+                'path': filepath,
+                'exists': exists,
+                'type': media_type
+            })
+
+    media_filepaths = [
+        r['path'] for r in results
+        if r['exists'] and r['type'] in ('video', 'audio')
+    ]
+
+    return media_filepaths
+
+
 def main():
     global pbar
 
@@ -3808,21 +4239,33 @@ def main():
 
     parser = argparse.ArgumentParser()
     parser.add_argument('source_path', help="Path to the video or audio files to generate subtitles files (use wildcard for multiple files or separate them with a space character e.g. \"file 1.mp4\" \"file 2.mp4\")", nargs='*')
-    parser.add_argument('-S', '--src-language', help="Language code of the audio language spoken in video/audio source_path", default="en")
-    parser.add_argument('-D', '--dst-language', help="Desired translation language code for the subtitles", default=None)
+    parser.add_argument('-B', '--big-models', action='store_true', help="Use big models if exist")
+    parser.add_argument('-R', '--remove-src', action='store_true', help="Remove source language subtitle files after translation")
+    parser.add_argument('-S', '--src-language', help="Language code of the audio language spoken in video/audio source_path, default='en'", default="en")
+    parser.add_argument('-D', '--dst-language', help="Desired translation language code for the subtitles, default = None", default=None)
     parser.add_argument('-lls', '--list-src-languages', help="List all available source languages (vosk supported languages)", action='store_true')
     parser.add_argument('-lld', '--list-dst-languages', help="List all available destination languages (google translate supported languages)", action='store_true')
-    parser.add_argument('-F', '--format', help="Desired subtitle format", default="srt")
+    parser.add_argument('-F', '--format', help="Desired subtitle format, default = 'srt'", default="srt")
     parser.add_argument('-lf', '--list-formats', help="List all supported subtitle formats", action='store_true')
-    parser.add_argument('-C', '--concurrency', help="Number of concurrent translate API requests to make", type=int, default=10)
-    parser.add_argument('-es', '--embed-src', help="Boolean value (True or False) for embedding original language subtitle file into media file", type=bool, default=False)
-    parser.add_argument('-ed', '--embed-dst', help="Boolean value (True or False) for embedding translated subtitle file into media file", type=bool, default=False)
-    parser.add_argument('-fr', '--force-recognize', help="Boolean value (True or False) for re-recognize media file event if it's already has subtitles stream", type=bool, default=False)
+    parser.add_argument('-C', '--concurrency', help="Number of concurrent translate API requests to make, default = 10", type=int, default=10)
+    parser.add_argument('-es', '--embed-src', help="Boolean value (True or False) for embedding original language subtitle file into media file, default = False", type=bool, default=False)
+    parser.add_argument('-ed', '--embed-dst', help="Boolean value (True or False) for embedding translated subtitle file into media file, default = False", type=bool, default=False)
+    parser.add_argument('-fr', '--force-recognize', help="Boolean value (True or False) for re-recognize media file event if it's already has subtitles stream, default = False", type=bool, default=False)
     parser.add_argument('-v', '--version', action='version', version=VERSION)
 
     args = parser.parse_args()
 
-    vosk_language = VoskLanguage()
+    print("")
+
+    vosk_language = None
+    if args.big_models:
+        print("Using big models")
+        vosk_language = VoskLanguageBig()
+        vosk_recognizer = VoskRecognizerBig(loglevel=-1, language_code=args.src_language, block_size=4096, progress_callback=show_progress)
+    else:
+        vosk_language = VoskLanguage()
+        vosk_recognizer = VoskRecognizer(loglevel=-1, language_code=args.src_language, block_size=4096, progress_callback=show_progress)
+
     google_language = GoogleLanguage()
 
     if args.list_src_languages:
@@ -3875,21 +4318,16 @@ def main():
     media_type = None
     media_format = None
 
-    # ============================================================
-    # TEST ENDPOINT ONCE
-    # ============================================================
-    endpoint_config = None
-    if not is_same_language(args.src_language, args.dst_language, error_messages_callback=show_error_messages):
-        endpoint_config = test_translation_endpoint(args.src_language,args.dst_language,error_messages_callback=show_error_messages)
-        if endpoint_config is None:
-            print("ERROR: No working Google Translate endpoint.")
-            return 1
-
     args_source_path = args.source_path
+    #print(f"args_source_path = {args_source_path}")
 
+    '''
     if (not "*" in str(args_source_path)) and (not "?" in str(args_source_path)):
+        print("CHECKING MEDIA FILES")
+        print("====================")
         for filepath in args_source_path:
             fpath = Path(filepath)
+            print(f"{('...' + str(fpath)[-(40-3):]) if len(str(fpath)) > 40 else str(fpath):<40}: {'exists' if os.path.exists(fpath) else 'not exist'}")
             if not os.path.isfile(fpath):
                 not_exist_filepaths.append(filepath)
 
@@ -3907,23 +4345,38 @@ def main():
 
         arg_filepaths += glob(arg)
 
+
     if arg_filepaths:
+        print(f"arg_filepaths = {arg_filepaths}")
+        
+        if (not "*" in str(args_source_path)) and (not "?" in str(args_source_path)): print("")
+        print("CHECKING MEDIA TYPE")
+        print("===================")
+
         for argpath in arg_filepaths:
             if os.path.isfile(argpath):
                 if check_file_type(argpath, error_messages_callback=show_error_messages) == 'video':
+                    print(f"{('...' + str(argpath)[-(40-3):]) if len(str(argpath)) > 40 else str(argpath):<40}: {'video'}")
                     media_filepaths.append(argpath)
                 elif check_file_type(argpath, error_messages_callback=show_error_messages) == 'audio':
+                    print(f"{('...' + str(argpath)[-(40-3):]) if len(str(argpath)) > 40 else str(argpath):<40}: {'audio'}")
                     media_filepaths.append(argpath)
                 else:
+                    print(f"{('...' + str(argpath)[-(40-3):]) if len(str(argpath)) > 40 else str(argpath):<40}: {'not a valid video or audio file'}")
                     invalid_media_filepaths.append(argpath)
             else:
+                #print(f"'{argpath}' is not exist")
+                print(f"{('...' + str(fpath)[-(40-3):]) if len(str(fpath)) > 40 else str(fpath):<40}: {'not exist'}")
                 not_exist_filepaths.append(argpath)
 
-        if invalid_media_filepaths:
-            for invalid_media_filepath in invalid_media_filepaths:
-                msg = f"'{invalid_media_filepath}' is not valid video or audio files"
-                print(msg)
+        #if invalid_media_filepaths:
+        #    for invalid_media_filepath in invalid_media_filepaths:
+        #        msg = f"'{invalid_media_filepath}' is not valid video or audio files"
+        #        print(msg)
+    '''
 
+
+    '''
     if not_exist_filepaths:
         for not_exist_filepath in not_exist_filepaths:
             msg = f"'{not_exist_filepath}' is not exist"
@@ -3933,6 +4386,21 @@ def main():
 
     if not arg_filepaths and not not_exist_filepaths:
         print("No any files matching filenames you typed")
+        print("")
+        sys.exit(0)
+
+
+    '''
+
+
+    print("CHECKING MEDIA FILES")
+    print("====================")
+    media_filepaths = check_file(args_source_path)
+
+    if not media_filepaths:
+        print("")
+        print("Nothing to process, exiting")
+        print("")
         sys.exit(0)
 
     pool = multiprocessing.Pool(args.concurrency)
@@ -3952,10 +4420,22 @@ def main():
     removed_media_filepaths = []
     processed_list = []
 
+    # ============================================================
+    # TEST ENDPOINT ONCE
+    # ============================================================
+    if media_filepaths and args.src_language and args.dst_language:
+        endpoint_config = None
+        if not is_same_language(args.src_language, args.dst_language, error_messages_callback=show_error_messages):
+            endpoint_config = test_translation_endpoint(args.src_language,args.dst_language,error_messages_callback=show_error_messages)
+            if endpoint_config is None:
+                print("ERROR: No working Google Translate endpoint.")
+                return 1
+
 
     # CHECK SUBTITLE STREAM PART
-    if args.force_recognize == False:
+    if media_filepaths and args.force_recognize == False:
 
+        if not do_translate: print("")
         print("CHECKING EXISTING SUBTITLES STREAMS")
         print("===================================")
 
@@ -4026,6 +4506,7 @@ def main():
                 hour, minute, second = transcribe_elapsed_time_str.split(":")
                 msg = "Total running time                      : %s:%s:%s" %(hour.zfill(2), minute, second)
                 print(msg)
+                print("")
                 sys.exit(0)
 
 
@@ -4254,7 +4735,7 @@ def main():
                             #print(f"\nargs.force_recognize == False, do_translate == True, media_type == 'video', subtitle stream = exist : completed_tasks = {completed_tasks}\n")
 
                 print("")
-            print("")
+            #print("")
 
             # nothing to process with speech reconition
             if not media_filepaths:
@@ -4265,10 +4746,11 @@ def main():
                 hour, minute, second = transcribe_elapsed_time_str.split(":")
                 msg = "Total running time                      : %s:%s:%s" %(hour.zfill(2), minute, second)
                 print(msg)
+                print("")
                 sys.exit(0)
 
 
-    if args.force_recognize == True:
+    if media_filepaths and args.force_recognize == True:
         # SUBTITLES STREAMS REMOVER PART (IF args.force_recognize == True)
         print("FORCE RECOGNIZE FLAG CHECK")
         print("==========================")
@@ -4342,7 +4824,7 @@ def main():
     if processed_list:
         # START THE TRANSCRIBE PROCESS
         print("PERFORMING SPEECH RECOGNITION FOR MEDIA FILES THAT HAVE NO SUBTITLES STREAMS OR FORCED TO BE RECOGNIZED")
-        print("=========================================================================================================")
+        print("=======================================================================================================")
 
         for media_filepath in processed_list:
             print(f"Processing '{media_filepath}'")
@@ -4360,6 +4842,7 @@ def main():
                 regions = region_finder(wav_filepath)
                 if regions == None:
                     print("No speech regions found")
+                    print("")
                     sys.exit(1)
 
                 if sys.platform == "win32":
@@ -4377,7 +4860,10 @@ def main():
                 #marker='█'
                 widgets = ["Performing speech recognition           : ", Percentage(), ' ', Bar(marker='#'), ' ', ETA()]
                 pbar = ProgressBar(widgets=widgets, maxval=100).start()
-                vosk_recognizer = VoskRecognizer(loglevel=-1, language_code=args.src_language, block_size=4096, progress_callback=show_progress)
+                if args.big_models:
+                    vosk_recognizer = VoskRecognizerBig(loglevel=-1, language_code=args.src_language, block_size=4096, progress_callback=show_progress)
+                else:
+                    vosk_recognizer = VoskRecognizer(loglevel=-1, language_code=args.src_language, block_size=4096, progress_callback=show_progress)
                 regions, transcripts = vosk_recognizer(wav_filepath)
                 pbar.finish()
 
@@ -4594,6 +5080,10 @@ def main():
                             else:
                                 print("Unknown error!")
 
+                if do_translate and args.remove_src:
+                    print(f"Removing '{src_subtitle_filepath}' as instructed with '-R' or '--remove-src' argument")
+                    os.remove(src_subtitle_filepath)
+
                 print('')
 
             except KeyboardInterrupt:
@@ -4646,6 +5136,8 @@ def main():
         hour, minute, second = transcribe_elapsed_time_str.split(":")
         msg = "Total running time                      : %s:%s:%s" %(hour.zfill(2), minute, second)
         print(msg)
+
+    print("")
 
     if pool:
         pool.close()
