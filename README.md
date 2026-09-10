@@ -65,22 +65,6 @@ cd dist
 pip install vosk_autosrt-0.0.2-cp310-cp310-win_amd64.whl
 ```
 
-You can also install this script (or any pip package) in ANDROID DEVICES via PYTHON package in TERMUX APP
-
-https://github.com/termux/termux-app/releases/tag/v0.118.0
-
-Choose the right apk for your device, install it, then open it
-
-Type these commands to get python, pip, this vosk_autosrt, (and any other pip packages) :
-
-```
-termux-setup-storage
-pkg update -y
-pkg install -y python
-pkg install -y ffmpeg
-pip install vosk_autosrt
-```
-
 ### Simple usage example 
 
 ```
