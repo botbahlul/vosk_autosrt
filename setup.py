@@ -4,6 +4,7 @@ import os
 import platform
 import re
 import sys
+import sysconfig
 import warnings
 
 warnings.filterwarnings(
@@ -11,15 +12,18 @@ warnings.filterwarnings(
     category=DeprecationWarning,
     module="setuptools",
 )
+
 warnings.filterwarnings(
     "ignore",
     category=UserWarning,
     module="setuptools",
 )
+
 warnings.filterwarnings(
     "ignore",
     message=".*is deprecated.*",
 )
+
 
 try:
     from setuptools import setup, find_packages
@@ -31,9 +35,9 @@ except ImportError:
     sys.exit(1)
 
 
-# ----------------------------------------------------------------------
+# ======================================================================
 # Python version
-# ----------------------------------------------------------------------
+# ======================================================================
 
 MIN_PYTHON = (3, 10)
 
@@ -49,13 +53,9 @@ if sys.version_info < MIN_PYTHON:
     sys.exit(1)
 
 
-# ----------------------------------------------------------------------
+# ======================================================================
 # Get package version WITHOUT importing vosk_autosrt
-#
-# This is important for Python 3.13+ because audioop was removed
-# from the standard library. Importing vosk_autosrt here would happen
-# before pip has installed audioop-lts.
-# ----------------------------------------------------------------------
+# ======================================================================
 
 PACKAGE_DIR = os.path.join(
     os.path.dirname(os.path.abspath(__file__)),
@@ -86,19 +86,66 @@ if not VERSION_MATCH:
 VERSION = VERSION_MATCH.group(1)
 
 
-# ----------------------------------------------------------------------
+# ======================================================================
 # Platform detection
-# ----------------------------------------------------------------------
+# ======================================================================
 
 SYSTEM = platform.system()
 MACHINE = platform.machine().lower()
 
 
+def _is_native_termux():
+    """
+    Detect ONLY native Termux.
+
+    IMPORTANT:
+    /data/data/com.termux is visible from proot-distro, so it must NOT
+    be used by itself to identify native Termux.
+
+    Native Termux Python normally has a prefix/executable under:
+        /data/data/com.termux/files/usr
+
+    A Python running inside proot-distro has a Linux prefix such as:
+        /root/venv
+        /usr
+        /usr/local
+    """
+
+    termux_prefix = "/data/data/com.termux/files/usr"
+
+    # Python installation prefix
+    for value in (
+        getattr(sys, "prefix", ""),
+        getattr(sys, "base_prefix", ""),
+        getattr(sys, "exec_prefix", ""),
+        getattr(sys, "base_exec_prefix", ""),
+    ):
+        if value.startswith(termux_prefix):
+            return True
+
+    # Python executable
+    executable = os.path.realpath(sys.executable)
+    if executable.startswith(termux_prefix + "/"):
+        return True
+
+    # sysconfig prefix/platform
+    try:
+        config_prefix = sysconfig.get_config_var("prefix") or ""
+        if config_prefix.startswith(termux_prefix):
+            return True
+    except Exception:
+        pass
+
+    return False
+
+
+IS_TERMUX = _is_native_termux()
+
+
 def get_platform_name():
-    """
-    Return a human-readable platform name.
-    """
-    if SYSTEM == "Windows":
+    if IS_TERMUX:
+        return "Android (Termux)"
+    elif SYSTEM == "Windows":
         return "Windows"
     elif SYSTEM == "Linux":
         return "Linux"
@@ -108,36 +155,136 @@ def get_platform_name():
         return SYSTEM
 
 
+# ======================================================================
+# Native library groups
+# ======================================================================
+
+WINDOWS_LIBS = [
+    "libgcc_s_seh-1.dll",
+    "libstdc++-6.dll",
+    "libvosk.dll",
+    "libwinpthread-1.dll",
+]
+
+
+LINUX_ARCH_LIB_MAP = {
+    "x86_64": "libvosk.so",
+    "amd64": "libvosk.so",
+
+    "aarch64": "libvosk_linux_aarch64.so",
+    "arm64": "libvosk_linux_aarch64.so",
+
+    "armv7l": "libvosk_linux_armv7l.so",
+    "armv7": "libvosk_linux_armv7l.so",
+    "armhf": "libvosk_linux_armv7l.so",
+}
+
+
+ANDROID_ARCH_LIB_MAP = {
+    "aarch64": "libvosk_android-arm64-v8a.so",
+    "arm64": "libvosk_android-arm64-v8a.so",
+
+    "armv7l": "libvosk_android-armeabi-v7a.so",
+    "armv7": "libvosk_android-armeabi-v7a.so",
+    "armhf": "libvosk_android-armeabi-v7a.so",
+
+    "x86_64": "libvosk_android-x86_64.so",
+    "amd64": "libvosk_android-x86_64.so",
+
+    "x86": "libvosk_android-x86.so",
+    "i686": "libvosk_android-x86.so",
+    "i386": "libvosk_android-x86.so",
+}
+
+
+DARWIN_LIBS = [
+    "libvosk.dyld",
+]
+
+
+# sdist must contain every native binary.
+LINUX_LIBS_ALL = list(dict.fromkeys(LINUX_ARCH_LIB_MAP.values()))
+ANDROID_LIBS_ALL = list(dict.fromkeys(ANDROID_ARCH_LIB_MAP.values()))
+
+ALL_LIBS = (
+    WINDOWS_LIBS
+    + LINUX_LIBS_ALL
+    + ANDROID_LIBS_ALL
+    + DARWIN_LIBS
+)
+
+
+# ======================================================================
+# Select native libraries
+# ======================================================================
+
 def get_lib_files():
     """
-    Return native Vosk library files required by this platform.
+    Return native libraries for the current build.
+
+    sdist:
+        Include ALL platform/architecture libraries.
+
+    wheel/local install:
+        Include only the native library matching the current
+        operating system and architecture.
     """
 
+    is_sdist = "sdist" in sys.argv
+
+    if is_sdist:
+        return ALL_LIBS
+
+    # --------------------------------------------------------------
+    # Native Termux / Android
+    # --------------------------------------------------------------
+    if IS_TERMUX:
+        lib = ANDROID_ARCH_LIB_MAP.get(MACHINE)
+
+        if lib is None:
+            raise NotImplementedError(
+                "Unsupported Android/Termux architecture: {}".format(
+                    MACHINE
+                )
+            )
+
+        return [lib]
+
+    # --------------------------------------------------------------
+    # Windows
+    # --------------------------------------------------------------
+    if SYSTEM == "Windows":
+        return WINDOWS_LIBS
+
+    # --------------------------------------------------------------
+    # macOS
+    # --------------------------------------------------------------
+    if SYSTEM == "Darwin":
+        return DARWIN_LIBS
+
+    # --------------------------------------------------------------
+    # Linux / glibc
+    # --------------------------------------------------------------
     if SYSTEM == "Linux":
-        return [
-            "libvosk.so",
-        ]
+        lib = LINUX_ARCH_LIB_MAP.get(MACHINE)
 
-    elif SYSTEM == "Darwin":
-        return [
-            "libvosk.dyld",
-        ]
+        if lib is None:
+            raise NotImplementedError(
+                "Unsupported Linux architecture: {}".format(
+                    MACHINE
+                )
+            )
 
-    elif SYSTEM == "Windows":
-        return [
-            "libgcc_s_seh-1.dll",
-            "libstdc++-6.dll",
-            "libvosk.dll",
-            "libwinpthread-1.dll",
-        ]
+        return [lib]
 
     raise NotImplementedError(
         "Platform '{}' is not supported.".format(SYSTEM)
     )
 
-# ----------------------------------------------------------------------
+
+# ======================================================================
 # Binary distribution
-# ----------------------------------------------------------------------
+# ======================================================================
 
 class BinaryDistribution(Distribution):
     """
@@ -152,14 +299,14 @@ class BinaryDistribution(Distribution):
         return False
 
 
-# ----------------------------------------------------------------------
+# ======================================================================
 # Verify native libraries
-# ----------------------------------------------------------------------
+# ======================================================================
 
 def check_lib_files():
     """
     Check whether the native libraries expected for the current
-    platform actually exist inside the vosk_autosrt package directory.
+    command exist.
     """
 
     package_dir = os.path.join(
@@ -167,9 +314,11 @@ def check_lib_files():
         "vosk_autosrt",
     )
 
+    expected = get_lib_files()
+
     missing = []
 
-    for filename in get_lib_files():
+    for filename in expected:
         filepath = os.path.join(package_dir, filename)
 
         if not os.path.isfile(filepath):
@@ -184,7 +333,10 @@ def check_lib_files():
 
         print()
         print("Platform : {}".format(get_platform_name()))
+        print("System   : {}".format(SYSTEM))
         print("Machine  : {}".format(MACHINE))
+        print("Python   : {}".format(sys.executable))
+        print("Prefix   : {}".format(sys.prefix))
         print()
 
         sys.exit(1)
@@ -193,9 +345,9 @@ def check_lib_files():
 check_lib_files()
 
 
-# ----------------------------------------------------------------------
+# ======================================================================
 # Long description
-# ----------------------------------------------------------------------
+# ======================================================================
 
 long_description = (
     "vosk_autosrt is a COMMAND LINE UTILITY for automatic speech "
@@ -210,13 +362,13 @@ long_description = (
 )
 
 
-# ----------------------------------------------------------------------
+# ======================================================================
 # Runtime dependencies
-# ----------------------------------------------------------------------
+# ======================================================================
 
 INSTALL_REQUIRES = [
+    "audioop-lts; python_version >= '3.13'",
     "sounddevice>=0.4.4",
-    "vosk>=0.3.44",
     "requests>=2.3.0",
     "httpx>=0.13.3",
     "urllib3>=1.26.0,<3.0",
@@ -226,30 +378,9 @@ INSTALL_REQUIRES = [
 ]
 
 
-# ----------------------------------------------------------------------
-# Python 3.13+ compatibility
-#
-# audioop was removed from the Python standard library in Python 3.13.
-#
-# vosk_autosrt uses:
-#
-#     try:
-#         import audioop
-#     except ImportError:
-#         import audioop_lts as audioop
-#
-# Therefore audioop-lts is required only for Python 3.13+.
-# ----------------------------------------------------------------------
-
-if sys.version_info >= (3, 13):
-    INSTALL_REQUIRES.append(
-        "audioop-lts"
-    )
-
-
-# ----------------------------------------------------------------------
+# ======================================================================
 # Setup
-# ----------------------------------------------------------------------
+# ======================================================================
 
 setup(
     name="vosk_autosrt",
@@ -286,7 +417,7 @@ setup(
         encoding="utf-8",
     ).read(),
 
-    include_package_data=True,
+    include_package_data=False,
 
     package_data={
         "vosk_autosrt": get_lib_files(),

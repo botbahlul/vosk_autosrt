@@ -4,72 +4,61 @@
 # vosk_autosrt PyPI build script
 #
 # Supported:
-#   Linux
+#   Linux (x86_64, aarch64, armv7l)
+#   Android (Termux murni)
 #   macOS
-#
-# Linux:
-#   Builds a normal wheel first, then uses auditwheel to create
-#   a manylinux wheel suitable for PyPI.
-#
-# macOS:
-#   Builds macOS x86_64 wheel for macOS 10.15.
 # ======================================================================
 
 set -e
 
-
 # ----------------------------------------------------------------------
 # Find Python
 # ----------------------------------------------------------------------
-
 if [ -n "$PYTHON" ]; then
     PYTHON_CMD="$PYTHON"
-
 elif command -v python3.10 >/dev/null 2>&1; then
     PYTHON_CMD="python3.10"
-
 elif command -v python3 >/dev/null 2>&1; then
     PYTHON_CMD="python3"
-
 elif command -v python >/dev/null 2>&1; then
     PYTHON_CMD="python"
-
 else
     echo "ERROR: Python 3 was not found."
     exit 1
 fi
 
-
 # ----------------------------------------------------------------------
 # Check Python version
 # ----------------------------------------------------------------------
-
 echo
 echo "Using Python:"
 "$PYTHON_CMD" --version
 
 "$PYTHON_CMD" -c '
 import sys
-
 if sys.version_info < (3, 10):
     print("ERROR: Python 3.10 or newer is required.")
-    print(
-        "Current version: {}.{}.{}".format(
-            sys.version_info[0],
-            sys.version_info[1],
-            sys.version_info[2],
-        )
-    )
     sys.exit(1)
 '
-
 
 # ----------------------------------------------------------------------
 # Detect operating system
 # ----------------------------------------------------------------------
-
 OS_NAME="$(uname -s)"
 CPU_ARCH="$(uname -m)"
+
+# Special detection for native Termux.
+# /data/data/com.termux is also visible inside proot-distro,
+# so its existence alone must NOT be used to identify Termux.
+if [ "$OS_NAME" = "Linux" ]; then
+    PYTHON_PREFIX="$("$PYTHON_CMD" -c 'import sys; print(sys.prefix)' 2>/dev/null)"
+
+    case "$PYTHON_PREFIX" in
+        /data/data/com.termux/files/usr*)
+            OS_NAME="Android"
+            ;;
+    esac
+fi
 
 echo
 echo "Operating system : $OS_NAME"
@@ -79,188 +68,159 @@ echo "Architecture     : $CPU_ARCH"
 # ----------------------------------------------------------------------
 # Clean previous build
 # ----------------------------------------------------------------------
-
 echo
 echo "Cleaning previous build files..."
-
-rm -rf build
-rm -rf dist
-rm -rf vosk_autosrt.egg-info
-
+rm -rf build dist *.egg-info
 
 # ----------------------------------------------------------------------
 # Build tools
 # ----------------------------------------------------------------------
-
 echo
 echo "Updating setuptools and wheel..."
-
 "$PYTHON_CMD" -m pip install --upgrade setuptools wheel
 
-
 # ----------------------------------------------------------------------
-# Build source distribution
+# Build source distribution (selalu berisi SEMUA binary lintas-platform)
 # ----------------------------------------------------------------------
-
 echo
 echo "Building source distribution..."
-
 "$PYTHON_CMD" setup.py sdist
 
-
 # ----------------------------------------------------------------------
-# Build platform-specific wheel
+# Build platform-specific wheel (hanya berisi binary platform aktif)
 # ----------------------------------------------------------------------
-
 case "$OS_NAME" in
 
     Darwin)
-
         echo
         echo "Detected macOS."
-
         if [ "$CPU_ARCH" = "x86_64" ]; then
-
-            echo "Detected Intel x86_64 macOS."
             echo "Building macOS 10.15 x86_64 wheel..."
-
-            "$PYTHON_CMD" setup.py bdist_wheel \
-                --plat-name macosx_10_15_x86_64
-
+            "$PYTHON_CMD" setup.py bdist_wheel --plat-name macosx_10_15_x86_64
         else
-
-            echo "Detected macOS architecture: $CPU_ARCH"
-            echo "Building automatic macOS wheel..."
-
+            echo "Building automatic macOS wheel ($CPU_ARCH)..."
             "$PYTHON_CMD" setup.py bdist_wheel
-
         fi
-
         ;;
 
-
     Linux)
-
         echo
-        echo "Detected Linux."
+        echo "Detected Linux ($CPU_ARCH)."
 
-        if [ "$CPU_ARCH" != "x86_64" ]; then
-            echo
-            echo "ERROR: This build script currently targets Linux x86_64."
-            echo "Detected architecture: $CPU_ARCH"
+        # Build native Linux wheel first.
+        "$PYTHON_CMD" setup.py bdist_wheel
+
+        echo "Checking auditwheel..."
+        if ! command -v auditwheel >/dev/null 2>&1; then
+            "$PYTHON_CMD" -m pip install --upgrade auditwheel
+        fi
+
+        echo "Checking patchelf..."
+        if ! command -v patchelf >/dev/null 2>&1; then
+            echo "ERROR: patchelf is required by auditwheel."
+            echo "Please install it using your system package manager:"
+            echo "    apt install patchelf"
             exit 1
         fi
 
+        case "$CPU_ARCH" in
+            x86_64)
+                MANYLINUX_PLAT="manylinux_2_17_x86_64"
+                NATIVE_WHEEL="dist/*linux_x86_64.whl"
+                ;;
 
-        # --------------------------------------------------------------
-        # Build normal Linux wheel
-        # --------------------------------------------------------------
+            aarch64)
+                MANYLINUX_PLAT="manylinux_2_17_aarch64"
+                NATIVE_WHEEL="dist/*linux_aarch64.whl"
+                ;;
 
-        echo
-        echo "Building Linux x86_64 wheel..."
+            armv7l)
+                MANYLINUX_PLAT="manylinux_2_17_armv7l"
+                NATIVE_WHEEL="dist/*linux_armv7l.whl"
+                ;;
 
-        "$PYTHON_CMD" setup.py bdist_wheel
-
-
-        # --------------------------------------------------------------
-        # Install auditwheel
-        # --------------------------------------------------------------
-
-        echo
-        echo "Checking auditwheel..."
-
-        if ! command -v auditwheel >/dev/null 2>&1; then
-
-            echo "auditwheel not found."
-            echo "Installing auditwheel..."
-
-            "$PYTHON_CMD" -m pip install --upgrade auditwheel
-
-        fi
-
-
-        # --------------------------------------------------------------
-        # Repair Linux wheel
-        # --------------------------------------------------------------
+            *)
+                echo "ERROR: Unsupported Linux architecture: $CPU_ARCH"
+                exit 1
+                ;;
+        esac
 
         echo
-        echo "Running auditwheel..."
+        echo "Running auditwheel repair..."
+        echo "Target platform : $MANYLINUX_PLAT"
+        echo "Input wheel     : $NATIVE_WHEEL"
 
         mkdir -p dist/repaired
 
-
         "$PYTHON_CMD" -m auditwheel repair \
-            --plat manylinux_2_17_x86_64 \
+            --plat "$MANYLINUX_PLAT" \
             --wheel-dir dist/repaired \
-            dist/*linux_x86_64.whl
+            $NATIVE_WHEEL
 
-
-        # --------------------------------------------------------------
-        # Replace original Linux wheel with repaired wheel
-        # --------------------------------------------------------------
-
-        echo
         echo "Replacing original Linux wheel..."
-
-        rm -f dist/*linux_x86_64.whl
-
+        rm -f $NATIVE_WHEEL
         mv dist/repaired/*.whl dist/
-
         rm -rf dist/repaired
-
         ;;
 
+    Android)
+        echo
+        echo "Detected Termux Android ($CPU_ARCH)."
+        echo "Building Android wheel..."
 
+        case "$CPU_ARCH" in
+            aarch64|arm64)
+                ANDROID_PLAT="android_24_arm64_v8a"
+                ;;
+            armv7l|armv7|armhf)
+                ANDROID_PLAT="android_24_armeabi_v7a"
+                ;;
+            x86_64|amd64)
+                ANDROID_PLAT="android_24_x86_64"
+                ;;
+            x86|i686|i386)
+                ANDROID_PLAT="android_24_x86"
+                ;;
+            *)
+                echo "ERROR: Unsupported Android architecture: $CPU_ARCH"
+                exit 1
+                ;;
+
+        esac
+
+        echo "Android platform tag: $ANDROID_PLAT"
+
+        "$PYTHON_CMD" setup.py bdist_wheel \
+            --plat-name "$ANDROID_PLAT"
+        ;;
     *)
-
         echo
         echo "ERROR: Unsupported operating system: $OS_NAME"
-        echo "This script supports Linux and macOS."
         exit 1
-
         ;;
-
 esac
-
 
 # ----------------------------------------------------------------------
 # Check resulting distributions
 # ----------------------------------------------------------------------
-
 echo
 echo "============================================================"
 echo "Generated distributions"
 echo "============================================================"
-echo
-
 ls -lh dist/
-
 
 # ----------------------------------------------------------------------
 # Verify wheel metadata
 # ----------------------------------------------------------------------
-
 echo
 echo "Checking distributions with twine..."
-
 if command -v twine >/dev/null 2>&1; then
-
     twine check dist/*
-
 else
-
-    echo "WARNING: twine is not installed."
-    echo "Install it with:"
-    echo
-    echo "    $PYTHON_CMD -m pip install twine"
-    echo
-
+    echo "WARNING: twine is not installed. Install it with: pip install twine"
 fi
-
 
 echo
 echo "============================================================"
 echo "BUILD SUCCESSFUL"
 echo "============================================================"
-echo
-

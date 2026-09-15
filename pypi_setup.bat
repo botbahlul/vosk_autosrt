@@ -15,6 +15,7 @@ REM   3. Updates setuptools and wheel
 REM   4. Cleans previous build files
 REM   5. Builds source distribution
 REM   6. Builds Windows wheel
+REM   7. Verifies distributions with twine (if available)
 REM ======================================================================
 
 
@@ -76,6 +77,18 @@ if errorlevel 1 (
     pause
     exit /b 1
 )
+
+
+REM ----------------------------------------------------------------------
+REM Detect architecture (info only, untuk parity dengan pypi_setup.sh)
+REM ----------------------------------------------------------------------
+
+set "CPU_ARCH="
+for /f "delims=" %%A in ('%PYTHON_CMD% -c "import platform; print(platform.machine())"') do set "CPU_ARCH=%%A"
+
+echo Operating system : Windows
+echo Architecture     : %CPU_ARCH%
+echo.
 
 
 REM ----------------------------------------------------------------------
@@ -155,6 +168,9 @@ if exist "vosk_autosrt.egg-info" (
 
 REM ----------------------------------------------------------------------
 REM Build source distribution
+REM
+REM (get_lib_files() di setup.py otomatis mendeteksi 'sdist' di sys.argv
+REM  dan menyertakan SEMUA binary libvosk lintas-platform ke dalam .tar.gz)
 REM ----------------------------------------------------------------------
 
 echo.
@@ -176,6 +192,10 @@ if errorlevel 1 (
 
 REM ----------------------------------------------------------------------
 REM Build Windows wheel
+REM
+REM (get_lib_files() di setup.py otomatis hanya menyertakan binary
+REM  Windows saja untuk wheel ini, tidak ada auditwheel/delocate
+REM  yang diperlukan di platform Windows)
 REM ----------------------------------------------------------------------
 
 echo.
@@ -192,6 +212,24 @@ if errorlevel 1 (
     echo.
     pause
     exit /b 1
+)
+
+
+REM ----------------------------------------------------------------------
+REM Verify distributions with twine (opsional)
+REM ----------------------------------------------------------------------
+
+echo.
+echo ============================================================
+echo Checking distributions with twine...
+echo ============================================================
+echo.
+
+where twine >nul 2>&1
+if not errorlevel 1 (
+    %PYTHON_CMD% -m twine check dist\*
+) else (
+    echo WARNING: twine is not installed. Install it with: pip install twine
 )
 
 
