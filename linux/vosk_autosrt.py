@@ -5,13 +5,8 @@ import multiprocessing
 import os
 import subprocess
 import sys
-if sys.version_info >= (3, 13):
-    try:
-        import audioop
-    except ImportError:
-        import audioop_lts as audioop
-else:
-    import audioop
+import platform
+import audioop
 import tempfile
 import wave
 import json
@@ -34,7 +29,7 @@ import warnings
 warnings.filterwarnings("ignore", message=".*The 'nopython' keyword.*")
 
 
-VERSION = "0.2.2"
+VERSION = "0.2.6"
 
 
 #============================================================== VOSK PART ==============================================================#
@@ -89,37 +84,69 @@ MODEL_DIRS = _build_model_dirs()
 #print(f"MODEL_DIRS : '{MODEL_DIRS}'")
 
 
+def _is_termux():
+    return (
+        os.path.isdir("/data/data/com.termux")
+        or "com.termux" in os.environ.get("PREFIX", "")
+        or "ANDROID_ROOT" in os.environ
+    )
+
+
 def libvoskdir():
+    machine = platform.machine().lower()
+
     if sys.platform == 'win32':
         libvosk = "libvosk.dll"
-    elif sys.platform == 'linux':
-        libvosk = "libvosk.so"
+
     elif sys.platform == 'darwin':
         libvosk = "libvosk.dyld"
+
+    elif sys.platform.startswith('linux') or sys.platform == 'android':
+        is_android = sys.platform == 'android' or _is_termux()
+
+        if is_android:
+            if 'aarch64' in machine or 'arm64' in machine:
+                libvosk = "libvosk_android-arm64-v8a.so"
+            elif 'armv7' in machine or 'armhf' in machine:
+                libvosk = "libvosk_android-armeabi-v7a.so"
+            elif 'x86_64' in machine:
+                libvosk = "libvosk_android-x86_64.so"
+            elif 'i686' in machine or 'i386' in machine or 'x86' in machine:
+                libvosk = "libvosk_android-x86.so"
+            else:
+                raise TypeError(f'Unsupported Android architecture: {machine}')
+        else:
+            if 'aarch64' in machine or 'arm64' in machine:
+                libvosk = "libvosk_linux_aarch64.so"
+            elif 'armv7' in machine or 'armhf' in machine:
+                libvosk = "libvosk_linux_armv7l.so"
+            else:
+                libvosk = "libvosk.so"
+
+    else:
+        raise TypeError('Unsupported platform')
+
+    # 2. Cari lokasi file tersebut di dalam PATH internal package
     dlldir = os.path.abspath(os.path.dirname(__file__))
     os.environ["PATH"] = dlldir + os.pathsep + os.environ['PATH']
     for path in os.environ["PATH"].split(os.pathsep):
         path = path.strip('"')
         if os.path.isfile(os.path.join(path, libvosk)):
-            return path
-    raise TypeError('libvosk not found')
-    
+            return path, libvosk
+
+    raise TypeError(f'{libvosk} not found')
+
 
 def open_dll():
-    dlldir = libvoskdir()
+    dlldir, libvosk_filename = libvoskdir()
+    
     if sys.platform == 'win32':
-        # We want to load dependencies too
         os.environ["PATH"] = dlldir + os.pathsep + os.environ['PATH']
         if hasattr(os, 'add_dll_directory'):
             os.add_dll_directory(dlldir)
-        return _ffi.dlopen(os.path.join(dlldir, "libvosk.dll"))
-    elif sys.platform == 'linux':
-        return _ffi.dlopen(os.path.join(dlldir, "libvosk.so"))
-    elif sys.platform == 'darwin':
-        return _ffi.dlopen(os.path.join(dlldir, "libvosk.dyld"))
-    else:
-        raise TypeError("Unsupported platform")
-
+            
+    # ffi.dlopen sekarang otomatis memuat library Android yang tepat dengan aman
+    return _ffi.dlopen(os.path.join(dlldir, libvosk_filename))
 
 _c = open_dll()
 
@@ -4167,10 +4194,6 @@ def get_duration(filename, error_messages_callback=None):
         return
 
 
-import os
-import sys
-import glob
-
 def escape_glob_brackets(pattern):
     """
     Just escape the characters '[' and ']' so that they are treated as literals by glob, 
@@ -4246,7 +4269,6 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('source_path', help="Path to the video or audio files to generate subtitles files (use wildcard for multiple files or separate them with a space character e.g. \"file 1.mp4\" \"file 2.mp4\")", nargs='*')
     parser.add_argument('-B', '--big-models', action='store_true', help="Use big models if exist")
-    parser.add_argument('-R', '--remove-src', action='store_true', help="Remove source language subtitle files after translation")
     parser.add_argument('-S', '--src-language', help="Language code of the audio language spoken in video/audio source_path, default='en'", default="en")
     parser.add_argument('-D', '--dst-language', help="Desired translation language code for the subtitles, default = None", default=None)
     parser.add_argument('-lls', '--list-src-languages', help="List all available source languages (vosk supported languages)", action='store_true')
@@ -4257,6 +4279,7 @@ def main():
     parser.add_argument('-es', '--embed-src', help="Boolean value (True or False) for embedding original language subtitle file into media file, default = False", type=bool, default=False)
     parser.add_argument('-ed', '--embed-dst', help="Boolean value (True or False) for embedding translated subtitle file into media file, default = False", type=bool, default=False)
     parser.add_argument('-fr', '--force-recognize', help="Boolean value (True or False) for re-recognize media file event if it's already has subtitles stream, default = False", type=bool, default=False)
+    parser.add_argument('-R', '--remove-src', action='store_true', help="Remove source language subtitle files after translation")
     parser.add_argument('-v', '--version', action='version', version=VERSION)
 
     args = parser.parse_args()
@@ -4326,78 +4349,6 @@ def main():
 
     args_source_path = args.source_path
     #print(f"args_source_path = {args_source_path}")
-
-    '''
-    if (not "*" in str(args_source_path)) and (not "?" in str(args_source_path)):
-        print("CHECKING MEDIA FILES")
-        print("====================")
-        for filepath in args_source_path:
-            fpath = Path(filepath)
-            print(f"{('...' + str(fpath)[-(40-3):]) if len(str(fpath)) > 40 else str(fpath):<40}: {'exists' if os.path.exists(fpath) else 'not exist'}")
-            if not os.path.isfile(fpath):
-                not_exist_filepaths.append(filepath)
-
-    if sys.platform == "win32":
-        for i in range(len(args.source_path)):
-            if ("[" or "]") in args.source_path[i]:
-                placeholder = "#TEMP#"
-                args_source_path[i] = args.source_path[i].replace("[", placeholder)
-                args_source_path[i] = args_source_path[i].replace("]", "[]]")
-                args_source_path[i] = args_source_path[i].replace(placeholder, "[[]")
-
-    for arg in args_source_path:
-        if not sys.platform == "win32" :
-            arg = escape(arg)
-
-        arg_filepaths += glob(arg)
-
-
-    if arg_filepaths:
-        print(f"arg_filepaths = {arg_filepaths}")
-        
-        if (not "*" in str(args_source_path)) and (not "?" in str(args_source_path)): print("")
-        print("CHECKING MEDIA TYPE")
-        print("===================")
-
-        for argpath in arg_filepaths:
-            if os.path.isfile(argpath):
-                if check_file_type(argpath, error_messages_callback=show_error_messages) == 'video':
-                    print(f"{('...' + str(argpath)[-(40-3):]) if len(str(argpath)) > 40 else str(argpath):<40}: {'video'}")
-                    media_filepaths.append(argpath)
-                elif check_file_type(argpath, error_messages_callback=show_error_messages) == 'audio':
-                    print(f"{('...' + str(argpath)[-(40-3):]) if len(str(argpath)) > 40 else str(argpath):<40}: {'audio'}")
-                    media_filepaths.append(argpath)
-                else:
-                    print(f"{('...' + str(argpath)[-(40-3):]) if len(str(argpath)) > 40 else str(argpath):<40}: {'not a valid video or audio file'}")
-                    invalid_media_filepaths.append(argpath)
-            else:
-                #print(f"'{argpath}' is not exist")
-                print(f"{('...' + str(fpath)[-(40-3):]) if len(str(fpath)) > 40 else str(fpath):<40}: {'not exist'}")
-                not_exist_filepaths.append(argpath)
-
-        #if invalid_media_filepaths:
-        #    for invalid_media_filepath in invalid_media_filepaths:
-        #        msg = f"'{invalid_media_filepath}' is not valid video or audio files"
-        #        print(msg)
-    '''
-
-
-    '''
-    if not_exist_filepaths:
-        for not_exist_filepath in not_exist_filepaths:
-            msg = f"'{not_exist_filepath}' is not exist"
-            print(msg)
-        if (not "*" in str(args_source_path)) and (not "?" in str(args_source_path)):
-            sys.exit(0)
-
-    if not arg_filepaths and not not_exist_filepaths:
-        print("No any files matching filenames you typed")
-        print("")
-        sys.exit(0)
-
-
-    '''
-
 
     print("CHECKING MEDIA FILES")
     print("====================")
