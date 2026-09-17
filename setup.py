@@ -3,9 +3,14 @@ from __future__ import unicode_literals
 import os
 import platform
 import re
+import struct
 import sys
-import sysconfig
 import warnings
+
+
+# ======================================================================
+# Suppress non-essential setuptools warnings
+# ======================================================================
 
 warnings.filterwarnings(
     "ignore",
@@ -25,12 +30,17 @@ warnings.filterwarnings(
 )
 
 
+# ======================================================================
+# setuptools
+# ======================================================================
+
 try:
     from setuptools import setup, find_packages
     from setuptools.dist import Distribution
 except ImportError:
     print("ERROR: setuptools is required to build vosk_autosrt.")
-    print("Please install it with:")
+    print()
+    print("Install it with:")
     print("    python -m pip install setuptools wheel")
     sys.exit(1)
 
@@ -42,9 +52,7 @@ except ImportError:
 MIN_PYTHON = (3, 10)
 
 if sys.version_info < MIN_PYTHON:
-    print(
-        "THIS MODULE REQUIRES PYTHON 3.10+."
-    )
+    print("THIS MODULE REQUIRES PYTHON 3.10+.")
     print(
         "YOU ARE CURRENTLY USING PYTHON {0}".format(
             platform.python_version()
@@ -54,7 +62,12 @@ if sys.version_info < MIN_PYTHON:
 
 
 # ======================================================================
-# Get package version WITHOUT importing vosk_autosrt
+# Package version
+#
+# DO NOT import vosk_autosrt here.
+#
+# This is important for Python 3.13+, because audioop was removed from
+# the standard library and the package may require audioop-lts.
 # ======================================================================
 
 PACKAGE_DIR = os.path.join(
@@ -70,6 +83,7 @@ INIT_FILE = os.path.join(
 with open(INIT_FILE, encoding="utf-8") as f:
     INIT_CONTENT = f.read()
 
+
 VERSION_MATCH = re.search(
     r'^VERSION\s*=\s*[\'"]([^\'"]+)[\'"]',
     INIT_CONTENT,
@@ -83,7 +97,249 @@ if not VERSION_MATCH:
     )
     sys.exit(1)
 
+
 VERSION = VERSION_MATCH.group(1)
+
+
+# ======================================================================
+# ELF PT_INTERP detection
+#
+# This is the important part.
+#
+# We do NOT use:
+#
+#   /data/data/com.termux
+#   sys.prefix
+#   PREFIX
+#
+# as the primary Termux detector.
+#
+# Instead we inspect the ELF interpreter of the Python executable that
+# is actually running setup.py.
+#
+# Native Android:
+#
+#   /system/bin/linker
+#   /system/bin/linker64
+#
+# Linux/glibc:
+#
+#   /lib/ld-linux-*.so.*
+#   /lib64/ld-linux-*.so.*
+#   /usr/lib/.../ld-linux-*.so.*
+#
+# Therefore:
+#
+#   native Termux Python -> Android
+#   proot-distro Python  -> Linux
+#
+# even if /data/data/com.termux is visible inside proot.
+# ======================================================================
+
+def get_elf_interpreter(filename):
+    """
+    Return the ELF PT_INTERP path of an executable.
+
+    Supports ELF32 and ELF64, little-endian and big-endian.
+
+    Returns:
+        str
+            Interpreter path.
+
+        ""
+            If the file is not a usable ELF executable or PT_INTERP
+            cannot be found.
+    """
+
+    try:
+        with open(filename, "rb") as f:
+            data = f.read()
+    except Exception:
+        return ""
+
+
+    if len(data) < 20:
+        return ""
+
+
+    # ELF magic.
+    if data[:4] != b"\x7fELF":
+        return ""
+
+
+    elf_class = data[4]
+    endian = data[5]
+
+
+    if endian == 1:
+        byte_order = "<"
+    elif endian == 2:
+        byte_order = ">"
+    else:
+        return ""
+
+
+    PT_INTERP = 3
+
+
+    try:
+
+        # --------------------------------------------------------------
+        # ELF64
+        # --------------------------------------------------------------
+
+        if elf_class == 2:
+
+            if len(data) < 64:
+                return ""
+
+            e_phoff = struct.unpack_from(
+                byte_order + "Q",
+                data,
+                32,
+            )[0]
+
+            e_phentsize = struct.unpack_from(
+                byte_order + "H",
+                data,
+                54,
+            )[0]
+
+            e_phnum = struct.unpack_from(
+                byte_order + "H",
+                data,
+                56,
+            )[0]
+
+
+            for index in range(e_phnum):
+
+                offset = (
+                    e_phoff
+                    + index * e_phentsize
+                )
+
+                if offset + e_phentsize > len(data):
+                    break
+
+
+                p_type = struct.unpack_from(
+                    byte_order + "I",
+                    data,
+                    offset,
+                )[0]
+
+
+                if p_type != PT_INTERP:
+                    continue
+
+
+                p_offset = struct.unpack_from(
+                    byte_order + "Q",
+                    data,
+                    offset + 8,
+                )[0]
+
+                p_filesz = struct.unpack_from(
+                    byte_order + "Q",
+                    data,
+                    offset + 32,
+                )[0]
+
+
+                value = data[
+                    p_offset:p_offset + p_filesz
+                ]
+
+
+                return value.rstrip(
+                    b"\0"
+                ).decode(
+                    "utf-8",
+                    "replace",
+                )
+
+
+        # --------------------------------------------------------------
+        # ELF32
+        # --------------------------------------------------------------
+
+        elif elf_class == 1:
+
+            if len(data) < 52:
+                return ""
+
+            e_phoff = struct.unpack_from(
+                byte_order + "I",
+                data,
+                28,
+            )[0]
+
+            e_phentsize = struct.unpack_from(
+                byte_order + "H",
+                data,
+                42,
+            )[0]
+
+            e_phnum = struct.unpack_from(
+                byte_order + "H",
+                data,
+                44,
+            )[0]
+
+
+            for index in range(e_phnum):
+
+                offset = (
+                    e_phoff
+                    + index * e_phentsize
+                )
+
+                if offset + e_phentsize > len(data):
+                    break
+
+
+                p_type = struct.unpack_from(
+                    byte_order + "I",
+                    data,
+                    offset,
+                )[0]
+
+
+                if p_type != PT_INTERP:
+                    continue
+
+
+                p_offset = struct.unpack_from(
+                    byte_order + "I",
+                    data,
+                    offset + 4,
+                )[0]
+
+                p_filesz = struct.unpack_from(
+                    byte_order + "I",
+                    data,
+                    offset + 16,
+                )[0]
+
+
+                value = data[
+                    p_offset:p_offset + p_filesz
+                ]
+
+
+                return value.rstrip(
+                    b"\0"
+                ).decode(
+                    "utf-8",
+                    "replace",
+                )
+
+    except Exception:
+        return ""
+
+
+    return ""
 
 
 # ======================================================================
@@ -93,71 +349,100 @@ VERSION = VERSION_MATCH.group(1)
 SYSTEM = platform.system()
 MACHINE = platform.machine().lower()
 
+PYTHON_EXECUTABLE = os.path.realpath(
+    sys.executable
+)
 
-def _is_native_termux():
+ELF_INTERPRETER = get_elf_interpreter(
+    PYTHON_EXECUTABLE
+)
+
+
+def detect_os():
     """
-    Detect ONLY native Termux.
+    Detect the actual runtime used by Python.
 
-    IMPORTANT:
-    /data/data/com.termux is visible from proot-distro, so it must NOT
-    be used by itself to identify native Termux.
+    Returns:
 
-    Native Termux Python normally has a prefix/executable under:
-        /data/data/com.termux/files/usr
+        Android
+            Native Android/Bionic Python.
 
-    A Python running inside proot-distro has a Linux prefix such as:
-        /root/venv
-        /usr
-        /usr/local
+        Linux
+            Linux/glibc or unknown Linux runtime.
+
+        Darwin
+            macOS.
+
+        Windows
+            Windows.
     """
 
-    termux_prefix = "/data/data/com.termux/files/usr"
-
-    # Python installation prefix
-    for value in (
-        getattr(sys, "prefix", ""),
-        getattr(sys, "base_prefix", ""),
-        getattr(sys, "exec_prefix", ""),
-        getattr(sys, "base_exec_prefix", ""),
-    ):
-        if value.startswith(termux_prefix):
-            return True
-
-    # Python executable
-    executable = os.path.realpath(sys.executable)
-    if executable.startswith(termux_prefix + "/"):
-        return True
-
-    # sysconfig prefix/platform
-    try:
-        config_prefix = sysconfig.get_config_var("prefix") or ""
-        if config_prefix.startswith(termux_prefix):
-            return True
-    except Exception:
-        pass
-
-    return False
+    if SYSTEM == "Darwin":
+        return "Darwin"
 
 
-IS_TERMUX = _is_native_termux()
-
-
-def get_platform_name():
-    if IS_TERMUX:
-        return "Android (Termux)"
-    elif SYSTEM == "Windows":
+    if SYSTEM == "Windows":
         return "Windows"
-    elif SYSTEM == "Linux":
-        return "Linux"
-    elif SYSTEM == "Darwin":
-        return "macOS"
-    else:
+
+
+    if SYSTEM != "Linux":
         return SYSTEM
 
 
+    # --------------------------------------------------------------
+    # Native Android/Bionic
+    # --------------------------------------------------------------
+
+    if ELF_INTERPRETER in (
+        "/system/bin/linker",
+        "/system/bin/linker64",
+    ):
+        return "Android"
+
+
+    # --------------------------------------------------------------
+    # Linux
+    #
+    # A Linux/glibc loader normally contains ld-linux.
+    #
+    # We intentionally default unknown Linux to Linux rather than
+    # Android. This prevents an accidental Android library from being
+    # selected merely because the environment is unusual.
+    # --------------------------------------------------------------
+
+    return "Linux"
+
+
+OS_NAME = detect_os()
+
+
 # ======================================================================
-# Native library groups
+# Platform information
 # ======================================================================
+
+def get_platform_name():
+    if OS_NAME == "Android":
+        return "Android (Termux)"
+
+    if OS_NAME == "Linux":
+        return "Linux"
+
+    if OS_NAME == "Darwin":
+        return "macOS"
+
+    if OS_NAME == "Windows":
+        return "Windows"
+
+    return OS_NAME
+
+
+# ======================================================================
+# Native library maps
+# ======================================================================
+
+# ----------------------------------------------------------------------
+# Windows
+# ----------------------------------------------------------------------
 
 WINDOWS_LIBS = [
     "libgcc_s_seh-1.dll",
@@ -167,44 +452,100 @@ WINDOWS_LIBS = [
 ]
 
 
+# ----------------------------------------------------------------------
+# Linux / glibc
+# ----------------------------------------------------------------------
+
 LINUX_ARCH_LIB_MAP = {
-    "x86_64": "libvosk.so",
-    "amd64": "libvosk.so",
 
-    "aarch64": "libvosk_linux_aarch64.so",
-    "arm64": "libvosk_linux_aarch64.so",
+    "x86_64":
+        "libvosk.so",
 
-    "armv7l": "libvosk_linux_armv7l.so",
-    "armv7": "libvosk_linux_armv7l.so",
-    "armhf": "libvosk_linux_armv7l.so",
+    "amd64":
+        "libvosk.so",
+
+    "aarch64":
+        "libvosk_linux_aarch64.so",
+
+    "arm64":
+        "libvosk_linux_aarch64.so",
+
+    "armv7l":
+        "libvosk_linux_armv7l.so",
+
+    "armv7":
+        "libvosk_linux_armv7l.so",
+
+    "armhf":
+        "libvosk_linux_armv7l.so",
 }
 
+
+# ----------------------------------------------------------------------
+# Android / Bionic
+# ----------------------------------------------------------------------
 
 ANDROID_ARCH_LIB_MAP = {
-    "aarch64": "libvosk_android-arm64-v8a.so",
-    "arm64": "libvosk_android-arm64-v8a.so",
 
-    "armv7l": "libvosk_android-armeabi-v7a.so",
-    "armv7": "libvosk_android-armeabi-v7a.so",
-    "armhf": "libvosk_android-armeabi-v7a.so",
+    "aarch64":
+        "libvosk_android-arm64-v8a.so",
 
-    "x86_64": "libvosk_android-x86_64.so",
-    "amd64": "libvosk_android-x86_64.so",
+    "arm64":
+        "libvosk_android-arm64-v8a.so",
 
-    "x86": "libvosk_android-x86.so",
-    "i686": "libvosk_android-x86.so",
-    "i386": "libvosk_android-x86.so",
+    "armv7l":
+        "libvosk_android-armeabi-v7a.so",
+
+    "armv7":
+        "libvosk_android-armeabi-v7a.so",
+
+    "armhf":
+        "libvosk_android-armeabi-v7a.so",
+
+    "x86_64":
+        "libvosk_android-x86_64.so",
+
+    "amd64":
+        "libvosk_android-x86_64.so",
+
+    "x86":
+        "libvosk_android-x86.so",
+
+    "i686":
+        "libvosk_android-x86.so",
+
+    "i386":
+        "libvosk_android-x86.so",
 }
 
+
+# ----------------------------------------------------------------------
+# macOS
+# ----------------------------------------------------------------------
 
 DARWIN_LIBS = [
     "libvosk.dyld",
 ]
 
 
-# sdist must contain every native binary.
-LINUX_LIBS_ALL = list(dict.fromkeys(LINUX_ARCH_LIB_MAP.values()))
-ANDROID_LIBS_ALL = list(dict.fromkeys(ANDROID_ARCH_LIB_MAP.values()))
+# ======================================================================
+# All native libraries
+#
+# sdist contains ALL binaries so that the source archive remains
+# capable of building wheels for the supported platforms.
+# ======================================================================
+
+LINUX_LIBS_ALL = list(
+    dict.fromkeys(
+        LINUX_ARCH_LIB_MAP.values()
+    )
+)
+
+ANDROID_LIBS_ALL = list(
+    dict.fromkeys(
+        ANDROID_ARCH_LIB_MAP.values()
+    )
+)
 
 ALL_LIBS = (
     WINDOWS_LIBS
@@ -220,25 +561,30 @@ ALL_LIBS = (
 
 def get_lib_files():
     """
-    Return native libraries for the current build.
+    Return native libraries required by the current build.
 
     sdist:
-        Include ALL platform/architecture libraries.
+        ALL native libraries.
 
-    wheel/local install:
-        Include only the native library matching the current
-        operating system and architecture.
+    wheel:
+        Only the library corresponding to the current runtime and
+        architecture.
     """
 
-    is_sdist = "sdist" in sys.argv
+    # --------------------------------------------------------------
+    # Source distribution
+    # --------------------------------------------------------------
 
-    if is_sdist:
+    if "sdist" in sys.argv:
         return ALL_LIBS
 
+
     # --------------------------------------------------------------
-    # Native Termux / Android
+    # Android / native Termux
     # --------------------------------------------------------------
-    if IS_TERMUX:
+
+    if OS_NAME == "Android":
+
         lib = ANDROID_ARCH_LIB_MAP.get(MACHINE)
 
         if lib is None:
@@ -250,22 +596,29 @@ def get_lib_files():
 
         return [lib]
 
+
     # --------------------------------------------------------------
     # Windows
     # --------------------------------------------------------------
-    if SYSTEM == "Windows":
+
+    if OS_NAME == "Windows":
         return WINDOWS_LIBS
+
 
     # --------------------------------------------------------------
     # macOS
     # --------------------------------------------------------------
-    if SYSTEM == "Darwin":
+
+    if OS_NAME == "Darwin":
         return DARWIN_LIBS
+
 
     # --------------------------------------------------------------
     # Linux / glibc
     # --------------------------------------------------------------
-    if SYSTEM == "Linux":
+
+    if OS_NAME == "Linux":
+
         lib = LINUX_ARCH_LIB_MAP.get(MACHINE)
 
         if lib is None:
@@ -277,8 +630,11 @@ def get_lib_files():
 
         return [lib]
 
+
     raise NotImplementedError(
-        "Platform '{}' is not supported.".format(SYSTEM)
+        "Platform '{}' is not supported.".format(
+            OS_NAME
+        )
     )
 
 
@@ -288,8 +644,8 @@ def get_lib_files():
 
 class BinaryDistribution(Distribution):
     """
-    Tell setuptools/wheel that this package contains
-    platform-specific native libraries.
+    Tell setuptools that this package contains platform-specific
+    native libraries.
     """
 
     def has_ext_modules(self):
@@ -304,39 +660,67 @@ class BinaryDistribution(Distribution):
 # ======================================================================
 
 def check_lib_files():
-    """
-    Check whether the native libraries expected for the current
-    command exist.
-    """
 
     package_dir = os.path.join(
         os.path.dirname(os.path.abspath(__file__)),
         "vosk_autosrt",
     )
 
+
     expected = get_lib_files()
 
     missing = []
 
+
     for filename in expected:
-        filepath = os.path.join(package_dir, filename)
+
+        filepath = os.path.join(
+            package_dir,
+            filename,
+        )
 
         if not os.path.isfile(filepath):
             missing.append(filepath)
 
+
     if missing:
+
         print()
-        print("ERROR: Required native library file(s) not found:")
+        print(
+            "ERROR: Required native library file(s) not found:"
+        )
 
         for filepath in missing:
-            print("  - {}".format(filepath))
+            print(
+                "  - {}".format(filepath)
+            )
 
         print()
-        print("Platform : {}".format(get_platform_name()))
-        print("System   : {}".format(SYSTEM))
-        print("Machine  : {}".format(MACHINE))
-        print("Python   : {}".format(sys.executable))
-        print("Prefix   : {}".format(sys.prefix))
+        print(
+            "Platform          : {}".format(
+                get_platform_name()
+            )
+        )
+        print(
+            "System            : {}".format(
+                SYSTEM
+            )
+        )
+        print(
+            "Architecture      : {}".format(
+                MACHINE
+            )
+        )
+        print(
+            "Python executable : {}".format(
+                PYTHON_EXECUTABLE
+            )
+        )
+        print(
+            "ELF interpreter   : {}".format(
+                ELF_INTERPRETER or "UNKNOWN"
+            )
+        )
         print()
 
         sys.exit(1)
@@ -367,13 +751,21 @@ long_description = (
 # ======================================================================
 
 INSTALL_REQUIRES = [
+
     "audioop-lts; python_version >= '3.13'",
+
     "sounddevice>=0.4.4",
+
     "requests>=2.3.0",
+
     "httpx>=0.13.3",
+
     "urllib3>=1.26.0,<3.0",
+
     "pysrt>=1.0.1",
+
     "six>=1.11.0",
+
     "progressbar2>=3.34.3",
 ]
 
@@ -383,6 +775,7 @@ INSTALL_REQUIRES = [
 # ======================================================================
 
 setup(
+
     name="vosk_autosrt",
 
     version=VERSION,
@@ -395,6 +788,7 @@ setup(
     long_description=long_description,
 
     author="Bot Bahlul",
+
     author_email="bot.bahlul@gmail.com",
 
     url="https://github.com/botbahlul/vosk_autosrt",
